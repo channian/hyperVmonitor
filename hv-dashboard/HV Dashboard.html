@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hyper-V 管理儀表板 · HVM</title>
+  <link rel="stylesheet" href="hv-dashboard.css">
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="hv-icons.jsx"></script>
+  <script type="text/babel" src="hv-components.jsx"></script>
+  <script type="text/babel" src="hv-page-overview.jsx"></script>
+  <script type="text/babel" src="hv-page-resources.jsx"></script>
+  <script type="text/babel" src="hv-page-snapshots.jsx"></script>
+  <script type="text/babel" src="hv-page-backup.jsx"></script>
+  <script type="text/babel" src="hv-page-security.jsx"></script>
+  <script type="text/babel" src="hv-page-alerts.jsx"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "accentColor": "#22d3ee",
+      "density": "normal",
+      "showBadges": true
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const saved = (() => { try { return localStorage.getItem('hvm.page') || 'overview'; } catch(e){ return 'overview'; }})();
+      const [page, setPage] = useState(saved);
+
+      const go = (p) => {
+        setPage(p);
+        try { localStorage.setItem('hvm.page', p); } catch(e){}
+      };
+
+      const PageMap = {
+        overview:  PageOverview,
+        resources: PageResources,
+        snapshots: PageSnapshots,
+        backup:    PageBackup,
+        security:  PageSecurity,
+        alerts:    PageAlerts,
+      };
+      const Page = PageMap[page] || PageOverview;
+
+      return (
+        <div className="hv-app" data-screen-label={page}>
+          <Sidebar page={page} setPage={go} />
+          <div className="hv-main">
+            <Topbar page={page} />
+            <div className="content">
+              <Page setPage={go} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+    // Tweaks panel protocol
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === '__activate_edit_mode') showTweaks();
+      if (e.data?.type === '__deactivate_edit_mode') hideTweaks();
+    });
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+
+    function showTweaks() {
+      document.getElementById('tweaks-panel')?.style && (document.getElementById('tweaks-panel').style.display = 'flex');
+    }
+    function hideTweaks() {
+      document.getElementById('tweaks-panel')?.style && (document.getElementById('tweaks-panel').style.display = 'none');
+    }
+  </script>
+
+  <!-- Tweaks panel -->
+  <div id="tweaks-panel" style="display:none; position:fixed; bottom:24px; right:24px; background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:20px; width:260px; flex-direction:column; gap:14px; z-index:9999; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#64748b;">Tweaks</span>
+      <button onclick="document.getElementById('tweaks-panel').style.display='none'; window.parent.postMessage({type:'__edit_mode_dismissed'},'*');"
+        style="background:none; border:none; color:#64748b; cursor:pointer; font-size:16px; line-height:1;">✕</button>
+    </div>
+    <div>
+      <div style="font-size:11px; color:#64748b; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.06em;">強調色</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <script>
+          const colors = [
+            { label:'青', val:'#22d3ee' },
+            { label:'藍', val:'#3b82f6' },
+            { label:'綠', val:'#22c55e' },
+            { label:'橙', val:'#f59e0b' },
+          ];
+        </script>
+        <button onclick="document.documentElement.style.setProperty('--accent','#22d3ee')" style="width:28px;height:28px;border-radius:50%;background:#22d3ee;border:2px solid #fff;cursor:pointer;"></button>
+        <button onclick="document.documentElement.style.setProperty('--accent','#3b82f6')" style="width:28px;height:28px;border-radius:50%;background:#3b82f6;border:2px solid transparent;cursor:pointer;"></button>
+        <button onclick="document.documentElement.style.setProperty('--accent','#22c55e')" style="width:28px;height:28px;border-radius:50%;background:#22c55e;border:2px solid transparent;cursor:pointer;"></button>
+        <button onclick="document.documentElement.style.setProperty('--accent','#f59e0b')" style="width:28px;height:28px;border-radius:50%;background:#f59e0b;border:2px solid transparent;cursor:pointer;"></button>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:11px; color:#64748b; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.06em;">介面密度</div>
+      <div style="display:flex; gap:8px;">
+        <button onclick="document.querySelectorAll('.card-ui').forEach(c=>c.style.padding='14px 16px')"
+          style="flex:1; padding:6px; background:#172033; border:1px solid #1e293b; border-radius:6px; color:#94a3b8; font-size:12px; cursor:pointer;">緊湊</button>
+        <button onclick="document.querySelectorAll('.card-ui').forEach(c=>c.style.padding='20px 22px')"
+          style="flex:1; padding:6px; background:#172033; border:1px solid #22d3ee; border-radius:6px; color:#22d3ee; font-size:12px; cursor:pointer;">標準</button>
+      </div>
+    </div>
+    <div style="border-top:1px solid #1e293b; padding-top:14px;">
+      <div style="font-size:11px; color:#64748b; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.06em;">模擬角色</div>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <button onclick="document.querySelector('.avatar').textContent='IT'" style="padding:7px; background:#172033; border:1px solid #1e293b; border-radius:6px; color:#94a3b8; font-size:12px; cursor:pointer; text-align:left;">
+          IT 工程師（完整細節）
+        </button>
+        <button onclick="document.querySelector('.avatar').textContent='MG'" style="padding:7px; background:#172033; border:1px solid #1e293b; border-radius:6px; color:#94a3b8; font-size:12px; cursor:pointer; text-align:left;">
+          IT 主管（摘要視角）
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
