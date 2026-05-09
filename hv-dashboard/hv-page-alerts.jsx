@@ -1,20 +1,5 @@
 // Page: 告警規則設定
-const { useState: useStateAl } = React;
-
-const DEFAULT_RULES = [
-  { id: 'cpu_crit',    name: 'CPU 嚴重告警',    desc: 'VM CPU 使用率 >', threshold: 85, unit: '%',   sev: 'err',  enabled: true },
-  { id: 'cpu_warn',    name: 'CPU 警告',         desc: 'VM CPU 使用率 >', threshold: 75, unit: '%',   sev: 'warn', enabled: true },
-  { id: 'ram_crit',    name: '記憶體嚴重告警',   desc: 'RAM Pressure >',  threshold: 80, unit: '%',   sev: 'err',  enabled: true },
-  { id: 'ram_warn',    name: '記憶體警告',       desc: 'RAM Pressure >',  threshold: 70, unit: '%',   sev: 'warn', enabled: true },
-  { id: 'snap_sql',    name: 'SQL 快照告警',     desc: 'SQL Server VM 存在快照',   threshold: 0,  unit: '個',  sev: 'err',  enabled: true },
-  { id: 'snap_old',    name: '快照超齡嚴重',     desc: '快照存在超過',    threshold: 7,  unit: '天',  sev: 'err',  enabled: true },
-  { id: 'snap_warn',   name: '快照超齡警告',     desc: '快照存在超過',    threshold: 3,  unit: '天',  sev: 'warn', enabled: true },
-  { id: 'backup_fail', name: '備份失敗告警',     desc: '備份工作失敗',    threshold: 0,  unit: '次',  sev: 'err',  enabled: true },
-  { id: 'rep_lag',     name: '複寫延遲告警',     desc: '複寫延遲超過',    threshold: 30, unit: '分鐘',sev: 'err',  enabled: true },
-  { id: 'login_fail',  name: '暴力破解偵測',     desc: '10 分鐘內登入失敗 ≥', threshold: 5, unit: '次', sev: 'err',  enabled: true },
-  { id: 'offhour',     name: '非上班時段登入',   desc: '22:00–07:00 管理員登入成功', threshold: 0, unit: '次', sev: 'warn', enabled: true },
-  { id: 'priv_group',  name: '特權群組異動',     desc: 'HV-Admins / DA 新增成員', threshold: 0, unit: '次', sev: 'err',  enabled: true },
-];
+const { useState: useStateAl, useEffect: useEffectAl } = React;
 
 const NOTIFY_CONFIG = {
   smtpHost: 'mail.company.com',
@@ -26,22 +11,61 @@ const NOTIFY_CONFIG = {
 };
 
 function PageAlerts() {
-  const [rules, setRules] = useStateAl(DEFAULT_RULES.map(r => ({ ...r })));
   const [tab, setTab] = useStateAl('thresholds');
   const [saved, setSaved] = useStateAl(false);
+  const [rules, setRules] = useStateAl([]);
+  const [notify, setNotify] = useStateAl({ ...NOTIFY_CONFIG });
+
+  const { data, loading, error } = useFetch('/api/alerts');
+
+  useEffectAl(() => {
+    if (data) setRules(data);
+  }, [data]);
 
   const updateThreshold = (id, val) => {
-    setRules(prev => prev.map(r => r.id === id ? { ...r, threshold: Number(val) } : r));
+    setRules(prev => prev.map(r => r.id === id ? { ...r, threshold_value: Number(val) } : r));
   };
-  const toggleEnabled = (id) => {
-    setRules(prev => prev.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
+
+  const toggleEnabled = async (id) => {
+    const rule = rules.find(r => r.id === id);
+    if (!rule) return;
+    const newEnabled = !rule.enabled;
+    setRules(prev => prev.map(r => r.id === id ? { ...r, enabled: newEnabled } : r));
+    try {
+      await fetch(`${API_BASE}/api/alerts/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: newEnabled }),
+      });
+    } catch (e) {
+      setRules(prev => prev.map(r => r.id === id ? { ...r, enabled: !newEnabled } : r));
+    }
   };
-  const handleSave = () => {
+
+  const handleSave = async () => {
+    for (const r of rules) {
+      try {
+        await fetch(`${API_BASE}/api/alerts/${r.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ threshold_value: r.threshold_value, enabled: r.enabled }),
+        });
+      } catch {}
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
 
-  const [notify, setNotify] = useStateAl({ ...NOTIFY_CONFIG });
+  if (loading) return <LoadingCard />;
+  if (error)   return <ErrorCard msg={error} />;
+
+  const categoryOrder = ['resource', 'snapshot', 'backup', 'security'];
+  const categoryLabels = { resource: '資源監控', snapshot: '快照合規', backup: '備份 / HA', security: '資安監控' };
+
+  const grouped = categoryOrder.reduce((acc, cat) => {
+    acc[cat] = rules.filter(r => r.category === cat);
+    return acc;
+  }, {});
 
   return (
     <>
@@ -64,54 +88,64 @@ function PageAlerts() {
       </div>
 
       {tab === 'thresholds' && (
-        <Card title="告警門檻值" icon={<Icon.settings />}>
-          <div className="tbl-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>規則名稱</th>
-                  <th>條件說明</th>
-                  <th className="td-center">嚴重度</th>
-                  <th style={{ minWidth: 160 }}>門檻值</th>
-                  <th className="td-center">啟用</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map(r => (
-                  <tr key={r.id} style={!r.enabled ? { opacity: 0.45 } : {}}>
-                    <td style={{ fontWeight: 600, fontSize: 13 }}>{r.name}</td>
-                    <td style={{ fontSize: 12, color: '#94a3b8' }}>{r.desc}</td>
-                    <td className="td-center">
-                      <Pill kind={r.sev === 'err' ? 'err' : 'warn'}>{r.sev === 'err' ? '嚴重' : '警告'}</Pill>
-                    </td>
-                    <td>
-                      {r.threshold === 0 && r.unit === '個' ? (
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#64748b' }}>觸發即告警</span>
-                      ) : r.threshold === 0 && r.unit === '次' ? (
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#64748b' }}>觸發即告警</span>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <input
-                            type="number"
-                            className="input"
-                            style={{ width: 80, padding: '5px 10px', fontSize: 13 }}
-                            value={r.threshold}
-                            onChange={e => updateThreshold(r.id, e.target.value)}
-                            disabled={!r.enabled}
-                          />
-                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#64748b' }}>{r.unit}</span>
-                        </div>
-                      )}
-                    </td>
-                    <td className="td-center">
-                      <ToggleSwitch enabled={r.enabled} onChange={() => toggleEnabled(r.id)} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {categoryOrder.map(cat => (
+            grouped[cat].length > 0 && (
+              <Card key={cat} title={categoryLabels[cat]} icon={<Icon.settings />}>
+                <div className="tbl-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>規則名稱</th>
+                        <th>條件說明</th>
+                        <th className="td-center">嚴重度</th>
+                        <th style={{ minWidth: 160 }}>門檻值</th>
+                        <th className="td-center">即時通知</th>
+                        <th className="td-center">啟用</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {grouped[cat].map(r => (
+                        <tr key={r.id} style={!r.enabled ? { opacity: 0.45 } : {}}>
+                          <td style={{ fontWeight: 600, fontSize: 13 }}>{r.rule_name}</td>
+                          <td style={{ fontSize: 12, color: '#94a3b8', maxWidth: 220, whiteSpace: 'normal', lineHeight: 1.4 }}>{r.description}</td>
+                          <td className="td-center">
+                            <Pill kind={r.severity === 'err' ? 'err' : 'warn'}>{r.severity === 'err' ? '嚴重' : '警告'}</Pill>
+                          </td>
+                          <td>
+                            {r.threshold_value == null ? (
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#64748b' }}>觸發即告警</span>
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <input
+                                  type="number"
+                                  className="input"
+                                  style={{ width: 80, padding: '5px 10px', fontSize: 13 }}
+                                  value={r.threshold_value}
+                                  onChange={e => updateThreshold(r.id, e.target.value)}
+                                  disabled={!r.enabled}
+                                />
+                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#64748b' }}>{r.threshold_unit}</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="td-center">
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: r.notify_immediate ? '#22c55e' : '#475569' }}>
+                              {r.notify_immediate ? '✓ 即時' : '彙整'}
+                            </span>
+                          </td>
+                          <td className="td-center">
+                            <ToggleSwitch enabled={r.enabled} onChange={() => toggleEnabled(r.id)} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )
+          ))}
+        </div>
       )}
 
       {tab === 'notify' && (
@@ -124,13 +158,8 @@ function PageAlerts() {
             ].map(f => (
               <div key={f.key} style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
-                <input
-                  type={f.type}
-                  className="input"
-                  style={{ width: '100%' }}
-                  value={notify[f.key]}
-                  onChange={e => setNotify(n => ({ ...n, [f.key]: e.target.value }))}
-                />
+                <input type={f.type} className="input" style={{ width: '100%' }}
+                  value={notify[f.key]} onChange={e => setNotify(n => ({ ...n, [f.key]: e.target.value }))} />
               </div>
             ))}
           </Card>
@@ -138,30 +167,19 @@ function PageAlerts() {
           <Card title="收件人設定" icon={<Icon.user />}>
             {[
               { label: 'IT 工程師群組（所有告警）', key: 'itGroup' },
-              { label: '主管群組（嚴重 + 日報）', key: 'mgmtGroup' },
+              { label: '主管群組（嚴重 + 日報）',   key: 'mgmtGroup' },
             ].map(f => (
               <div key={f.key} style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
-                <input
-                  type="text"
-                  className="input"
-                  style={{ width: '100%' }}
-                  value={notify[f.key]}
-                  onChange={e => setNotify(n => ({ ...n, [f.key]: e.target.value }))}
-                />
+                <input type="text" className="input" style={{ width: '100%' }}
+                  value={notify[f.key]} onChange={e => setNotify(n => ({ ...n, [f.key]: e.target.value }))} />
               </div>
             ))}
             <div>
               <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>每日報告發送時間</div>
-              <input
-                type="time"
-                className="input"
-                style={{ width: 120 }}
-                value={notify.scheduleTime}
-                onChange={e => setNotify(n => ({ ...n, scheduleTime: e.target.value }))}
-              />
+              <input type="time" className="input" style={{ width: 120 }}
+                value={notify.scheduleTime} onChange={e => setNotify(n => ({ ...n, scheduleTime: e.target.value }))} />
             </div>
-
             <div style={{ marginTop: 20, padding: '14px 16px', background: 'var(--bg-1)', borderRadius: 8, border: '1px solid var(--border-1)' }}>
               <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', marginBottom: 8 }}>通知策略</div>
               {[

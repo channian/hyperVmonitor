@@ -1,6 +1,43 @@
 // Shared components for HV Dashboard
 const { useState: useStateC, useEffect: useEffectC } = React;
 
+// API 基底 URL：同源時留空，跨域時設為 FastAPI 位址（例如 http://192.168.1.200:8000）
+const API_BASE = window.HVM_API_BASE || '';
+
+function useFetch(path) {
+  const [data, setData]     = useStateC(null);
+  const [loading, setLoading] = useStateC(true);
+  const [error, setError]   = useStateC(null);
+  useEffectC(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(API_BASE + path)
+      .then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); })
+      .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [path]);
+  return { data, loading, error };
+}
+
+function LoadingCard() {
+  return (
+    <div className="card-ui" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 120, color: '#475569', gap: 10 }}>
+      <div className="dot" style={{ width: 8, height: 8, borderRadius: '50%', background: '#22d3ee', animation: 'pulse 1.2s infinite' }}></div>
+      <span style={{ fontSize: 13 }}>載入中…</span>
+    </div>
+  );
+}
+
+function ErrorCard({ msg }) {
+  return (
+    <div className="card-ui" style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 80, color: '#ef4444' }}>
+      <Icon.alertTri style={{ width: 16, height: 16 }} />
+      <span style={{ fontSize: 13 }}>API 錯誤：{msg}</span>
+    </div>
+  );
+}
+
 // ── Brand Mark ──────────────────────────────────────────────
 function BrandMark() {
   return (
@@ -199,4 +236,4 @@ function Banner({ kind = 'err', title, msg, actions }) {
   );
 }
 
-Object.assign(window, { BrandMark, Sidebar, Topbar, Pill, Dot, Btn, Card, Metric, ProgressBar, Sparkline, Banner });
+Object.assign(window, { BrandMark, Sidebar, Topbar, Pill, Dot, Btn, Card, Metric, ProgressBar, Sparkline, Banner, useFetch, LoadingCard, ErrorCard, API_BASE });
