@@ -6,6 +6,23 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./hv_metrics.db"
 
+    # Email
+    smtp_host: str = ""
+    smtp_port: int = 25
+    smtp_sender_email: str = ""
+    smtp_sender_name: str = "Hyper-V Monitor"
+    alert_email_it: str = ""
+    alert_email_manager: str = ""
+    dashboard_url: str = ""
+
+    # Webhook
+    webhook_enable: bool = False
+    webhook_url: str = ""
+    webhook_token: str = ""
+    webhook_body_template: str = '{"token":"{{$token}}","content":"{{$message}}"}'
+    webhook_use_proxy: bool = False
+    webhook_proxy_url: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

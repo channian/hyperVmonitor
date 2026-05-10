@@ -5,6 +5,7 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 pywinrm==0.4.3
 requests-kerberos==0.15.0
+requests==2.32.3
+urllib3==2.3.0
 python-multipart==0.0.19
-aiosmtplib==3.0.2
 apscheduler==3.10.4
