@@ -122,64 +122,29 @@ exit
 確認 Python 3.10+ 已安裝，執行以下步驟：
 
 ```bash
-# 4-1 安裝套件
+# 4-1 安裝套件（在 backend/ 目錄下）
 cd /path/to/hyperVmonitor/backend
-pip install pywinrm
-```
-
-建立測試腳本 `test_winrm.py`（放在 `backend/` 目錄下）：
-
-```python
-# backend/test_winrm.py
-import json
-import sys
-
-# 修改這三個變數
-HOST     = "192.168.1.101"
-USER     = "administrator"
-PASSWORD = "your_password_here"
-
-sys.path.insert(0, ".")
-from collector.winrm_client import WinRMClient
-
-def test(label, script):
-    print(f"\n{'='*50}")
-    print(f"測試：{label}")
-    print("="*50)
-    try:
-        result = client.run_ps(script)
-        data = json.loads(result)
-        if isinstance(data, list):
-            print(f"✅ 成功，回傳 {len(data)} 筆")
-            for item in data[:3]:   # 只印前 3 筆
-                print(f"   {item}")
-        else:
-            print(f"✅ 成功：{data}")
-    except Exception as e:
-        print(f"❌ 失敗：{e}")
-
-client = WinRMClient(HOST, USER, PASSWORD)
-
-test("Get-VM 基本資訊",
-    "Get-VM | Select-Object Name, State, ProcessorCount | ConvertTo-Json -Compress")
-
-test("Get-VMSnapshot 快照清單",
-    "Get-VMSnapshot -VMName * | Select-Object VMName, Name, CreationTime | ConvertTo-Json -Compress")
-
-test("Hyper-V CPU 計數器",
-    r"(Get-Counter '\Hyper-V Hypervisor\Virtual Processors' -ErrorAction SilentlyContinue).CounterSamples | Select-Object Path, CookedValue | ConvertTo-Json -Compress")
-
-test("Get-VMReplication 複寫狀態",
-    "Get-VMReplication | Select-Object VMName, State, Health | ConvertTo-Json -Compress")
-
-test("宿主機 CPU 使用率",
-    r"(Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples[0].CookedValue | ConvertTo-Json -Compress")
+pip install -r requirements.txt
 ```
 
 ```bash
-# 4-2 執行測試
+# 4-2 設定環境變數（或在 .env 填入後直接執行）
+export WINRM_USER=administrator
+export WINRM_PASSWORD=your_password_here
+export HV_HOSTS=10.10.22.187        # 換成實際 IP，逗號分隔可測多台
+```
+
+```bash
+# 4-3 執行測試（腳本已內建於 backend/test_winrm.py）
 python test_winrm.py
 ```
+
+測試腳本會依序驗證：`whoami`、`Get-VM`、`Get-VMSnapshot`、`Get-VMReplication`、
+Hyper-V 計數器、宿主機 CPU 計數器、安全性事件記錄、`Get-VMNetworkAdapter`。
+全部通過後輸出彙整結果表格。
+
+> **Note**：`Get-VMReplication` 若無回傳為正常（尚未設定複寫時）。
+> 安全性事件記錄若 30 分鐘內無登入活動也可能回傳空值，均視為通過。
 
 ---
 
@@ -189,12 +154,14 @@ python test_winrm.py
 |---|---|---|
 | WinRM 服務狀態（宿主機） | ⬜ 通過 / ⬜ 失敗 | |
 | TCP 5985 連通性 | ⬜ 通過 / ⬜ 失敗 | |
-| Test-WSMan | ⬜ 通過 / ⬜ 失敗 | |
-| Enter-PSSession | ⬜ 通過 / ⬜ 失敗 | |
+| Test-WSMan | ⬜ 通過 / ⬜ 失敗 | Code=5 為 UAC 問題，不影響後續 |
+| Enter-PSSession | ✅ 通過 | 已確認 |
 | Get-VM（Python） | ⬜ 通過 / ⬜ 失敗 | |
 | Get-VMSnapshot（Python） | ⬜ 通過 / ⬜ 失敗 | |
 | Hyper-V 計數器（Python） | ⬜ 通過 / ⬜ 失敗 | |
-| Get-VMReplication（Python） | ⬜ 通過 / ⬜ 失敗 | |
+| Get-VMReplication（Python） | ⬜ 通過 / ⬜ 失敗 | 未設複寫時空回傳為正常 |
+| 安全性事件記錄（Python） | ⬜ 通過 / ⬜ 失敗 | |
+| Get-VMNetworkAdapter（Python） | ⬜ 通過 / ⬜ 失敗 | |
 
 ---
 
