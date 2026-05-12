@@ -152,10 +152,10 @@ Hyper-V 計數器、宿主機 CPU 計數器、安全性事件記錄、`Get-VMNet
 
 | 測試項目 | 結果 | 備註 |
 |---|---|---|
-| WinRM 服務狀態（宿主機） | ⬜ 通過 / ⬜ 失敗 | |
-| TCP 5985 連通性 | ⬜ 通過 / ⬜ 失敗 | |
-| Test-WSMan | ⬜ 通過 / ⬜ 失敗 | Code=5 為 UAC 問題，不影響後續 |
-| Enter-PSSession | ✅ 通過 | 已確認 |
+| WinRM 服務狀態（宿主機） | ✅ 通過 | |
+| TCP 5985 連通性 | ✅ 通過 | |
+| Test-WSMan | ⚠️ Code=5 | UAC token 過濾，不影響實際連線 |
+| Enter-PSSession | ✅ 通過 | |
 | Get-VM（Python） | ⬜ 通過 / ⬜ 失敗 | |
 | Get-VMSnapshot（Python） | ⬜ 通過 / ⬜ 失敗 | |
 | Hyper-V 計數器（Python） | ⬜ 通過 / ⬜ 失敗 | |
