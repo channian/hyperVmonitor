@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from sqlalchemy.orm import Session
 from .winrm_client import WinRMClient
+from .utils import parse_ps_datetime
 from models import VM, VMSnapshot
 
 _PS_GET_SNAPSHOTS = """
@@ -30,7 +31,7 @@ def collect_snapshots(client: WinRMClient, db: Session):
         if vm is None:
             continue
 
-        created_at = datetime.fromisoformat(item["CreationTimeUTC"].replace("Z", "+00:00")).replace(tzinfo=None)
+        created_at = parse_ps_datetime(item["CreationTimeUTC"])
         snap_name  = item["Name"]
 
         exists = db.query(VMSnapshot).filter_by(

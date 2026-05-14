@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from sqlalchemy.orm import Session
 from .winrm_client import WinRMClient
+from .utils import parse_ps_datetime
 from models import VM, VMReplication
 
 _PS_GET_REPLICATION = """
@@ -34,11 +35,7 @@ def collect_replication(client: WinRMClient, db: Session):
         if vm is None:
             continue
 
-        last_time = None
-        if item.get("LastReplicationTimeUTC"):
-            last_time = datetime.fromisoformat(
-                item["LastReplicationTimeUTC"].replace("Z", "+00:00")
-            ).replace(tzinfo=None)
+        last_time = parse_ps_datetime(item.get("LastReplicationTimeUTC"))
 
         rpo_minutes = max(1, int(item.get("ReplicationFrequencySec", 900)) // 60)
 

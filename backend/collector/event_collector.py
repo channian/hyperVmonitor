@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from .winrm_client import WinRMClient
+from .utils import parse_ps_datetime
 from models import SecurityEvent
 
 # 收集 4624/4625/4728/4732/4740 等關鍵事件，往回看 10 分鐘（避免重複）
@@ -61,9 +62,7 @@ def collect_security_events(client: WinRMClient, db: Session, source_host: str):
 
     for item in items:
         event_id = int(item["EventId"])
-        occurred_at = datetime.fromisoformat(
-            item["TimeCreated"].replace("Z", "+00:00")
-        ).replace(tzinfo=None)
+        occurred_at = parse_ps_datetime(item["TimeCreated"])
 
         if occurred_at < cutoff:
             continue
