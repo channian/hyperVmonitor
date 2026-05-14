@@ -17,6 +17,9 @@ from .event_collector import collect_security_events
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
+# 確保資料表存在（無論是直接執行或被 import 啟動都需要）
+Base.metadata.create_all(bind=engine)
+
 # 從環境變數讀取設定（或 .env）
 WINRM_USER     = os.environ.get("WINRM_USER", "administrator")
 WINRM_PASSWORD = os.environ.get("WINRM_PASSWORD", "")
@@ -59,7 +62,6 @@ def _collect_all():
 
 
 if __name__ == "__main__":
-    Base.metadata.create_all(bind=engine)
     log.info("Collector 排程啟動，目標主機：%s", HOSTS)
 
     scheduler = BlockingScheduler(timezone="Asia/Taipei")

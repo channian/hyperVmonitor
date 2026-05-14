@@ -1,61 +1,126 @@
 from datetime import datetime, timedelta
-import random
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
+from models import Host, HostMetric, VM, VMMetric
 from schemas import ResourcesResponse, HostSummary, VMSummary, VMDetailResponse, VMHistory
 
 router = APIRouter(prefix="/api/resources", tags=["resources"])
 
-_MOCK_HOSTS = [
-    HostSummary(name="KHFACVS01", ip="192.168.1.101", online=True,
-                cpu_pct=42, ram_used_gb=312, ram_total_gb=400,
-                storage_used_tb=2.8, storage_total_tb=4.0),
-    HostSummary(name="KHFACVS02", ip="192.168.1.102", online=True,
-                cpu_pct=21, ram_used_gb=220, ram_total_gb=400,
-                storage_used_tb=1.2, storage_total_tb=4.0),
-]
 
-_MOCK_VMS = [
-    VMSummary(name="KHTWXDB",        host="KHFACVS01", vcpu=4,  cpu_pct=90, ram_used_gb=14, ram_pressure_pct=65, net_in_kbps=279,  net_out_kbps=142, state="Running", cpu_status="err",  ram_status="ok"),
-    VMSummary(name="KHTWIOTPWR",     host="KHFACVS01", vcpu=4,  cpu_pct=25, ram_used_gb=12, ram_pressure_pct=79, net_in_kbps=21,   net_out_kbps=8,   state="Running", cpu_status="ok",   ram_status="warn"),
-    VMSummary(name="KHTWXFD",        host="KHFACVS01", vcpu=4,  cpu_pct=40, ram_used_gb=8,  ram_pressure_pct=None, net_in_kbps=1024, net_out_kbps=512, state="Running", cpu_status="ok", ram_status="ok"),
-    VMSummary(name="KHTWXML",        host="KHFACVS01", vcpu=16, cpu_pct=12, ram_used_gb=22, ram_pressure_pct=43, net_in_kbps=2,    net_out_kbps=1,   state="Running", cpu_status="ok",   ram_status="ok"),
-    VMSummary(name="KHTWXAR",        host="KHFACVS02", vcpu=4,  cpu_pct=35, ram_used_gb=10, ram_pressure_pct=55, net_in_kbps=50,   net_out_kbps=30,  state="Running", cpu_status="ok",   ram_status="ok"),
-    VMSummary(name="KHTWIOTVIB",     host="KHFACVS02", vcpu=2,  cpu_pct=18, ram_used_gb=4,  ram_pressure_pct=30, net_in_kbps=5,    net_out_kbps=2,   state="Running", cpu_status="ok",   ram_status="ok"),
-    VMSummary(name="FACCENTRALJUMP01", host="KHFACVS02", vcpu=2, cpu_pct=8, ram_used_gb=4,  ram_pressure_pct=20, net_in_kbps=10,   net_out_kbps=5,   state="Running", cpu_status="ok",   ram_status="ok"),
-    VMSummary(name="FACCENTRALJUMP02", host="KHFACVS02", vcpu=2, cpu_pct=7, ram_used_gb=4,  ram_pressure_pct=18, net_in_kbps=8,    net_out_kbps=4,   state="Running", cpu_status="ok",   ram_status="ok"),
-]
+def _cpu_status(pct: float) -> str:
+    if pct >= 85:
+        return "err"
+    if pct >= 70:
+        return "warn"
+    return "ok"
 
 
-def _make_history(base_cpu: float, days: int = 7) -> list[VMHistory]:
-    now = datetime.utcnow()
-    points = []
-    for i in range(days * 4):   # 每 6 小時一個點，共 28 點
-        t = now - timedelta(hours=(days * 4 - i) * 6)
-        jitter = random.uniform(-8, 8)
-        points.append(VMHistory(
-            collected_at=t,
-            cpu_pct=max(0, min(100, base_cpu + jitter)),
-            ram_pressure_pct=None,
-        ))
-    return points
+def _ram_status(pct: float | None) -> str:
+    if pct is None:
+        return "ok"
+    if pct >= 80:
+        return "err"
+    if pct >= 70:
+        return "warn"
+    return "ok"
+
+
+def _latest_host_metric(db: Session, host_id: int) -> HostMetric | None:
+    return (
+        db.query(HostMetric)
+        .filter_by(host_id=host_id)
+        .order_by(HostMetric.collected_at.desc())
+        .first()
+    )
+
+
+def _latest_vm_metric(db: Session, vm_id: int) -> VMMetric | None:
+    return (
+        db.query(VMMetric)
+        .filter_by(vm_id=vm_id)
+        .order_by(VMMetric.collected_at.desc())
+        .first()
+    )
+
+
+def _build_vm_summary(vm: VM, m: VMMetric | None) -> VMSummary:
+    cpu = round(m.cpu_pct, 1) if m else 0.0
+    ram_used = round(m.ram_used_gb, 1) if m else 0.0
+    ram_pres = round(m.ram_pressure_pct, 1) if (m and m.ram_pressure_pct is not None) else None
+    net_in  = round(m.net_in_kbps, 1) if m else 0.0
+    net_out = round(m.net_out_kbps, 1) if m else 0.0
+    return VMSummary(
+        name=vm.name,
+        host=vm.host.name,
+        vcpu=vm.vcpu,
+        cpu_pct=cpu,
+        ram_used_gb=ram_used,
+        ram_pressure_pct=ram_pres,
+        net_in_kbps=net_in,
+        net_out_kbps=net_out,
+        state=vm.state,
+        cpu_status=_cpu_status(cpu),
+        ram_status=_ram_status(ram_pres),
+    )
 
 
 @router.get("", response_model=ResourcesResponse)
 def get_resources(db: Session = Depends(get_db)):
-    return ResourcesResponse(hosts=_MOCK_HOSTS, vms=_MOCK_VMS)
+    hosts = db.query(Host).all()
+    host_summaries = []
+    for h in hosts:
+        m = _latest_host_metric(db, h.id)
+        host_summaries.append(HostSummary(
+            name=h.name,
+            ip=h.ip,
+            online=h.online,
+            cpu_pct=round(m.cpu_pct, 1) if m else 0.0,
+            ram_used_gb=round(m.ram_used_gb, 1) if m else 0.0,
+            ram_total_gb=round(m.ram_total_gb, 1) if m else 0.0,
+            storage_used_tb=round(m.storage_used_tb, 2) if m else 0.0,
+            storage_total_tb=round(m.storage_total_tb, 2) if m else 0.0,
+        ))
+
+    vms = db.query(VM).all()
+    vm_summaries = [_build_vm_summary(vm, _latest_vm_metric(db, vm.id)) for vm in vms]
+
+    return ResourcesResponse(hosts=host_summaries, vms=vm_summaries)
 
 
 @router.get("/vms/{vm_name}", response_model=VMDetailResponse)
 def get_vm_detail(vm_name: str = Path(...), db: Session = Depends(get_db)):
-    vm = next((v for v in _MOCK_VMS if v.name == vm_name), None)
+    vm = db.query(VM).filter(VM.name == vm_name.upper()).first()
     if vm is None:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="VM not found")
-    history = _make_history(vm.cpu_pct)
-    cpu_values = [h.cpu_pct for h in history]
+
+    since = datetime.utcnow() - timedelta(days=7)
+    metrics = (
+        db.query(VMMetric)
+        .filter(VMMetric.vm_id == vm.id, VMMetric.collected_at >= since)
+        .order_by(VMMetric.collected_at.asc())
+        .all()
+    )
+
+    history = [
+        VMHistory(
+            collected_at=m.collected_at,
+            cpu_pct=round(m.cpu_pct, 1),
+            ram_pressure_pct=round(m.ram_pressure_pct, 1) if m.ram_pressure_pct is not None else None,
+        )
+        for m in metrics
+    ]
+
+    latest = _latest_vm_metric(db, vm.id)
+    cpu_values = [m.cpu_pct for m in metrics] if metrics else ([latest.cpu_pct] if latest else [0.0])
     p95 = sorted(cpu_values)[int(len(cpu_values) * 0.95)]
     avg = sum(cpu_values) / len(cpu_values)
-    recommended = int(vm.vcpu * 1.5) if p95 > 85 else None
-    return VMDetailResponse(vm=vm, history=history, cpu_p95=round(p95, 1), cpu_avg=round(avg, 1), recommended_vcpu=recommended)
+    recommended_vcpu = int(vm.vcpu * 1.5) if p95 > 85 else None
+
+    return VMDetailResponse(
+        vm=_build_vm_summary(vm, latest),
+        history=history,
+        cpu_p95=round(p95, 1),
+        cpu_avg=round(avg, 1),
+        recommended_vcpu=recommended_vcpu,
+    )
