@@ -6,27 +6,60 @@ from .winrm_client import WinRMClient
 from models import VM, VMMetric, Host, HostMetric
 
 # PowerShell：取得所有 VM 基本資訊
+# MemoryDemand：Dynamic Memory 啟用時才有意義；關閉時為 0
+# MemoryMaximum：VM 設定的最大記憶體（用於計算靜態記憶體壓力）
 _PS_GET_VM = """
 Get-VM | Select-Object Name, State, ProcessorCount,
     @{N='MemoryAssignedGB';E={[math]::Round($_.MemoryAssigned/1GB,2)}},
-    @{N='MemoryDemandGB';E={[math]::Round($_.MemoryDemand/1GB,2)}} |
+    @{N='MemoryDemandGB';E={[math]::Round($_.MemoryDemand/1GB,2)}},
+    @{N='MemoryMaximumGB';E={[math]::Round($_.MemoryMaximum/1GB,2)}},
+    DynamicMemoryEnabled |
     ConvertTo-Json -Compress
 """
 
 # PowerShell：取得 Hyper-V 效能計數器（CPU / 網路）
+# CPU：萬用字元取所有 VP，按 VM 彙整平均（支援多 vCPU）
+# 網路：萬用字元取所有網卡，按 VM 加總
 _PS_GET_COUNTER = r"""
-$vms = Get-VM | Where-Object State -eq 'Running' | Select-Object -ExpandProperty Name
-$result = foreach ($vm in $vms) {
-    $cpuPath  = "\Hyper-V Hypervisor Virtual Processor($vm:Hv VP 0)\% Guest Run Time"
-    $netInPath  = "\Hyper-V Virtual Network Adapter($vm - $vm)\Bytes Received/sec"
-    $netOutPath = "\Hyper-V Virtual Network Adapter($vm - $vm)\Bytes Sent/sec"
-    $counters = @($cpuPath, $netInPath, $netOutPath)
-    $raw = Get-Counter -Counter $counters -ErrorAction SilentlyContinue
+$cpuMap    = @{}
+$netInMap  = @{}
+$netOutMap = @{}
+
+# CPU - 所有 VP，instance 格式: "vmname:hv vp N"
+$vpSamples = (Get-Counter '\Hyper-V Hypervisor Virtual Processor(*)\% Guest Run Time' `
+    -ErrorAction SilentlyContinue).CounterSamples
+foreach ($s in $vpSamples) {
+    if ($s.InstanceName -notmatch ':hv vp') { continue }
+    $vm = ($s.InstanceName -split ':hv vp')[0].ToUpper().Trim()
+    if (-not $cpuMap.ContainsKey($vm)) { $cpuMap[$vm] = @() }
+    $cpuMap[$vm] += $s.CookedValue
+}
+
+# 網路 - instance 格式: "vmname -- adaptername"
+$netSamples = (Get-Counter `
+    '\Hyper-V Virtual Network Adapter(*)\Bytes Received/sec', `
+    '\Hyper-V Virtual Network Adapter(*)\Bytes Sent/sec' `
+    -ErrorAction SilentlyContinue).CounterSamples
+foreach ($s in $netSamples) {
+    $vm = ($s.InstanceName -split ' -- ')[0].ToUpper().Trim()
+    if ($s.Path -like '*Received*') {
+        $netInMap[$vm]  = [double]($netInMap[$vm])  + $s.CookedValue
+    } else {
+        $netOutMap[$vm] = [double]($netOutMap[$vm]) + $s.CookedValue
+    }
+}
+
+$result = Get-VM | Where-Object State -eq 'Running' | ForEach-Object {
+    $n    = $_.Name.ToUpper()
+    $vals = $cpuMap[$n]
+    $cpu  = if ($vals -and $vals.Count -gt 0) {
+        [math]::Round(($vals | Measure-Object -Average).Average, 1)
+    } else { 0.0 }
     [PSCustomObject]@{
-        VM       = $vm
-        CpuPct   = [math]::Round(($raw.CounterSamples | Where-Object Path -like "*Guest Run Time*").CookedValue, 1)
-        NetInKBps = [math]::Round(($raw.CounterSamples | Where-Object Path -like "*Bytes Received*").CookedValue / 1024, 1)
-        NetOutKBps= [math]::Round(($raw.CounterSamples | Where-Object Path -like "*Bytes Sent*").CookedValue / 1024, 1)
+        VM         = $n
+        CpuPct     = $cpu
+        NetInKBps  = [math]::Round([double]($netInMap[$n])  / 1024, 1)
+        NetOutKBps = [math]::Round([double]($netOutMap[$n]) / 1024, 1)
     }
 }
 $result | ConvertTo-Json -Compress
@@ -91,16 +124,25 @@ def collect_vm_metrics(client: WinRMClient, db: Session, host_record: Host):
         vm_obj = db.query(VM).filter_by(name=name).first()
         if vm_obj is None:
             continue
+        raw_vm = next((v for v in vms_raw if v["Name"].upper() == name), None)
+        ram_assigned = raw_vm["MemoryAssignedGB"] if raw_vm else 0
+
+        # RAM 壓力：Dynamic Memory 開啟時用 Demand/Assigned；
+        # 關閉時用 Assigned/Maximum（靜態配置的使用比例）
         ram_pressure = None
-        if vm_obj.ram_gb:
-            raw_vm = next((v for v in vms_raw if v["Name"].upper() == name), None)
-            if raw_vm and raw_vm.get("MemoryDemandGB"):
-                ram_pressure = round(raw_vm["MemoryDemandGB"] / vm_obj.ram_gb * 100, 1)
+        if raw_vm:
+            demand = raw_vm.get("MemoryDemandGB", 0) or 0
+            maximum = raw_vm.get("MemoryMaximumGB", 0) or 0
+            dyn_enabled = raw_vm.get("DynamicMemoryEnabled", False)
+            if dyn_enabled and demand > 0 and ram_assigned > 0:
+                ram_pressure = round(demand / ram_assigned * 100, 1)
+            elif not dyn_enabled and maximum > 0:
+                ram_pressure = round(ram_assigned / maximum * 100, 1)
 
         db.add(VMMetric(
             vm_id=vm_obj.id,
             cpu_pct=c.get("CpuPct", 0),
-            ram_used_gb=raw_vm["MemoryAssignedGB"] if raw_vm else 0,
+            ram_used_gb=ram_assigned,
             ram_pressure_pct=ram_pressure,
             net_in_kbps=c.get("NetInKBps", 0),
             net_out_kbps=c.get("NetOutKBps", 0),
