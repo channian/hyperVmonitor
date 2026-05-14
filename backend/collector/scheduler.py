@@ -3,10 +3,9 @@
 或透過 Windows Task Scheduler 呼叫。
 """
 import logging
-import os
 from apscheduler.schedulers.blocking import BlockingScheduler
 from sqlalchemy.orm import Session
-from database import SessionLocal, engine, Base
+from database import SessionLocal, engine, Base, settings
 from models import Host
 from .winrm_client import WinRMClient
 from .vm_collector import collect_vm_metrics
@@ -20,10 +19,10 @@ log = logging.getLogger(__name__)
 # 確保資料表存在（無論是直接執行或被 import 啟動都需要）
 Base.metadata.create_all(bind=engine)
 
-# 從環境變數讀取設定（或 .env）
-WINRM_USER     = os.environ.get("WINRM_USER", "administrator")
-WINRM_PASSWORD = os.environ.get("WINRM_PASSWORD", "")
-HOSTS          = [h.strip() for h in os.environ.get("HV_HOSTS", "").split(",") if h.strip()]
+# 從 .env 讀取設定（透過 pydantic-settings，與 FastAPI 共用同一份設定）
+WINRM_USER     = settings.winrm_user
+WINRM_PASSWORD = settings.winrm_password
+HOSTS          = [h.strip() for h in settings.hv_hosts.split(",") if h.strip()]
 
 
 def _get_or_create_host(db: Session, name: str, ip: str) -> Host:

@@ -6,20 +6,20 @@ WinRM 連線測試腳本。
     cd backend
     python test_winrm.py
 
-若有多台宿主機，可用逗號分隔 HOST 變數，腳本會逐一測試。
-或直接從 .env 讀取（需安裝 python-dotenv 或手動填入下方變數）。
+設定從 backend/.env 自動讀取（HV_HOSTS / WINRM_USER / WINRM_PASSWORD）。
 """
 import json
-import os
 import sys
 
-# ── 設定：直接填入，或讓腳本從 .env 自動讀取 ─────────────────
-HOST     = os.getenv("HV_HOSTS", "192.168.1.101").split(",")[0].strip()
-USER     = os.getenv("WINRM_USER", "administrator")
-PASSWORD = os.getenv("WINRM_PASSWORD", "your_password_here")
-# ────────────────────────────────────────────────────────────
-
 sys.path.insert(0, ".")
+
+# 透過 pydantic-settings 讀取 .env，與 FastAPI / scheduler 共用同一份設定
+from database import settings  # noqa: E402
+
+HOST     = settings.hv_hosts.split(",")[0].strip() if settings.hv_hosts else "192.168.1.101"
+USER     = settings.winrm_user
+PASSWORD = settings.winrm_password
+# ────────────────────────────────────────────────────────────
 
 try:
     from collector.winrm_client import WinRMClient

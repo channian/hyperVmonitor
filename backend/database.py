@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./hv_metrics.db"
 
+    # WinRM / Collector
+    winrm_user: str = "administrator"
+    winrm_password: str = ""
+    hv_hosts: str = ""          # 逗號分隔，如 "10.10.22.187,10.10.22.188"
+
     # Email
     smtp_host: str = ""
     smtp_port: int = 25
