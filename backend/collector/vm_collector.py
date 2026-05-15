@@ -127,17 +127,15 @@ def collect_vm_metrics(client: WinRMClient, db: Session, host_record: Host):
         raw_vm = next((v for v in vms_raw if v["Name"].upper() == name), None)
         ram_assigned = raw_vm["MemoryAssignedGB"] if raw_vm else 0
 
-        # RAM 壓力：Dynamic Memory 開啟時用 Demand/Assigned；
-        # 關閉時用 Assigned/Maximum（靜態配置的使用比例）
+        # RAM 壓力：
+        # - Dynamic Memory 開啟：Demand/Assigned（實際需求 vs 目前配置）
+        # - 靜態記憶體：MemoryMaximum == MemoryAssigned，無壓力意義，留 None
         ram_pressure = None
         if raw_vm:
             demand = raw_vm.get("MemoryDemandGB", 0) or 0
-            maximum = raw_vm.get("MemoryMaximumGB", 0) or 0
             dyn_enabled = raw_vm.get("DynamicMemoryEnabled", False)
             if dyn_enabled and demand > 0 and ram_assigned > 0:
                 ram_pressure = round(demand / ram_assigned * 100, 1)
-            elif not dyn_enabled and maximum > 0:
-                ram_pressure = round(ram_assigned / maximum * 100, 1)
 
         db.add(VMMetric(
             vm_id=vm_obj.id,
