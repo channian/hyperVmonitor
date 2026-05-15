@@ -35,13 +35,15 @@ foreach ($s in $vpSamples) {
     $cpuMap[$vm] += $s.CookedValue
 }
 
-# 網路 - instance 格式: "vmname -- adaptername"
+# 網路 - 繁體中文 Windows instance 格式:
+#   "vmname_網路介面卡_guid--guid"
+# VM 名稱不含底線（NetBIOS 命名規則），取第一個底線前的部分
 $netSamples = (Get-Counter `
     '\Hyper-V Virtual Network Adapter(*)\Bytes Received/sec', `
     '\Hyper-V Virtual Network Adapter(*)\Bytes Sent/sec' `
     -ErrorAction SilentlyContinue).CounterSamples
 foreach ($s in $netSamples) {
-    $vm = ($s.InstanceName -split ' -- ')[0].ToUpper().Trim()
+    $vm = ($s.InstanceName -split '_')[0].ToUpper().Trim()
     if ($s.Path -like '*Received*') {
         $netInMap[$vm]  = [double]($netInMap[$vm])  + $s.CookedValue
     } else {
@@ -127,14 +129,13 @@ def collect_vm_metrics(client: WinRMClient, db: Session, host_record: Host):
         raw_vm = next((v for v in vms_raw if v["Name"].upper() == name), None)
         ram_assigned = raw_vm["MemoryAssignedGB"] if raw_vm else 0
 
-        # RAM 壓力：
-        # - Dynamic Memory 開啟：Demand/Assigned（實際需求 vs 目前配置）
-        # - 靜態記憶體：MemoryMaximum == MemoryAssigned，無壓力意義，留 None
+        # RAM 壓力：Demand/Assigned（有 Demand 資料就算，靜態/動態皆適用）
+        # 靜態記憶體 VM 的 MemoryDemand 代表 Guest OS 實際用量
+        # KHTWXAR / KHTWXDB / KHTWXFD 等無 Demand 資料時留 None
         ram_pressure = None
         if raw_vm:
             demand = raw_vm.get("MemoryDemandGB", 0) or 0
-            dyn_enabled = raw_vm.get("DynamicMemoryEnabled", False)
-            if dyn_enabled and demand > 0 and ram_assigned > 0:
+            if demand > 0 and ram_assigned > 0:
                 ram_pressure = round(demand / ram_assigned * 100, 1)
 
         db.add(VMMetric(
