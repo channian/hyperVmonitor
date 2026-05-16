@@ -63,31 +63,38 @@ function BrandMark() {
 }
 
 // ── Sidebar ──────────────────────────────────────────────────
-function Sidebar({ page, setPage, alertCount }) {
+function Sidebar({ page, setPage, badges = {} }) {
   const items = [
-    { id: 'overview',   label: '總覽',     en: 'Overview',   icon: <Icon.dashboard /> },
-    { id: 'resources',  label: '資源監控', en: 'Resources',  icon: <Icon.cpu /> },
-    { id: 'snapshots',  label: '快照合規', en: 'Snapshots',  icon: <Icon.camera />, badge: 8, badgeKind: 'err' },
-    { id: 'backup',     label: '備份 / HA',en: 'Backup',     icon: <Icon.backup />, badge: 1, badgeKind: 'err' },
-    { id: 'security',   label: '資安監控', en: 'Security',   icon: <Icon.shieldAlert />, badge: 3, badgeKind: 'err' },
-    { id: 'alerts',     label: '告警設定', en: 'Alerts',     icon: <Icon.settings /> },
+    { id: 'overview',   label: '總覽',     icon: <Icon.dashboard /> },
+    { id: 'resources',  label: '資源監控', icon: <Icon.cpu /> },
+    { id: 'snapshots',  label: '快照合規', icon: <Icon.camera />,      badgeKey: 'snapshots' },
+    { id: 'backup',     label: '備份 / HA',icon: <Icon.backup />,      badgeKey: 'backup' },
+    { id: 'security',   label: '資安監控', icon: <Icon.shieldAlert />, badgeKey: 'security' },
+    { id: 'alerts',     label: '告警設定', icon: <Icon.settings /> },
   ];
   return (
     <aside className="sidebar">
       <BrandMark />
       <div className="nav-section">MONITORING</div>
-      {items.map(it => (
-        <div key={it.id} className={`nav-item ${page === it.id ? 'active' : ''}`} onClick={() => setPage(it.id)}>
-          {it.icon}
-          <span>{it.label}</span>
-          {it.badge ? (
-            <span className={it.badgeKind === 'warn' ? 'badge-warn' : 'badge'}>{it.badge}</span>
-          ) : null}
-        </div>
-      ))}
+      {items.map(it => {
+        const b = it.badgeKey ? badges[it.badgeKey] : null;
+        return (
+          <div key={it.id} className={`nav-item ${page === it.id ? 'active' : ''}`} onClick={() => setPage(it.id)}>
+            {it.icon}
+            <span>{it.label}</span>
+            {b && b.count > 0 ? (
+              <span className={b.kind === 'warn' ? 'badge-warn' : 'badge'}>{b.count}</span>
+            ) : null}
+          </div>
+        );
+      })}
       <div className="nav-section">SYSTEM</div>
-      <div className="nav-item"><Icon.settings /><span>系統設定</span></div>
-      <div className="nav-item"><Icon.user /><span>管理帳號</span></div>
+      <div className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => setPage('settings')}>
+        <Icon.settings /><span>系統設定</span>
+      </div>
+      <div className={`nav-item ${page === 'admin' ? 'active' : ''}`} onClick={() => setPage('admin')}>
+        <Icon.user /><span>管理帳號</span>
+      </div>
     </aside>
   );
 }
@@ -108,6 +115,8 @@ function Topbar({ page }) {
     backup:    { h1: '備份 / HA 狀態',    crumb: 'home / backup' },
     security:  { h1: '資安監控',           crumb: 'home / security' },
     alerts:    { h1: '告警規則設定',       crumb: 'home / alert-settings' },
+    settings:  { h1: '系統設定',           crumb: 'home / settings' },
+    admin:     { h1: '管理帳號',           crumb: 'home / admin' },
   };
   const t = titles[page] || titles.overview;
   return (

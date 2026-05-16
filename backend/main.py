@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 import os
 
 from database import engine, Base
-from routers import overview, resources, snapshots, backup, security, alerts
+from routers import overview, resources, snapshots, backup, security, alerts, settings
 
 Base.metadata.create_all(bind=engine)
 
@@ -24,6 +24,7 @@ app.include_router(snapshots.router)
 app.include_router(backup.router)
 app.include_router(security.router)
 app.include_router(alerts.router)
+app.include_router(settings.router)
 
 # 靜態前端檔案
 _FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "hv-dashboard")

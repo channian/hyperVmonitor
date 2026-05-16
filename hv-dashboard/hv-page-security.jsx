@@ -1,5 +1,5 @@
 // Page: 資安監控
-const { useState: useStateSec } = React;
+const { useState: useStateSec, useEffect: useEffectSec } = React;
 
 const EVENT_TYPE_LABELS = {
   login_fail:    '登入失敗',
@@ -9,22 +9,31 @@ const EVENT_TYPE_LABELS = {
   unknown:       '其他',
 };
 
+const SEC_PAGE_SIZE = 20;
+
 function PageSecurity() {
   const [timeRange, setTimeRange] = useStateSec('today');
-  const [tab, setTab] = useStateSec('events');
+  const [search, setSearch] = useStateSec('');
+  const [currentPage, setCurrentPage] = useStateSec(1);
 
   const { data, loading, error } = useFetch(`/api/security?period=${timeRange}`);
+
+  useEffectSec(() => { setCurrentPage(1); }, [search, timeRange]);
 
   if (loading) return <LoadingCard />;
   if (error)   return <ErrorCard msg={error} />;
 
   const { summary_cards, events } = data;
-  const abnormalCount = events.filter(e => e.severity !== 'info').length;
 
   const fmtTime = (iso) => {
     if (!iso) return '—';
     const d = new Date(iso);
-    return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+    const yyyy = d.getFullYear();
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const dd   = String(d.getDate()).padStart(2, '0');
+    const hh   = String(d.getHours()).padStart(2, '0');
+    const min  = String(d.getMinutes()).padStart(2, '0');
+    return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
   };
 
   const cardIconMap = {
@@ -34,6 +43,22 @@ function PageSecurity() {
     vm_operation: <Icon.eye />,
     ot:           <Icon.net />,
   };
+
+  // 搜尋過濾
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? events.filter(e =>
+        (e.account      || '').toLowerCase().includes(q) ||
+        (e.source_host  || '').toLowerCase().includes(q) ||
+        (EVENT_TYPE_LABELS[e.event_type] || e.event_type || '').toLowerCase().includes(q) ||
+        (e.description  || '').toLowerCase().includes(q)
+      )
+    : events;
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / SEC_PAGE_SIZE));
+  const safePage   = Math.min(currentPage, totalPages);
+  const paginated  = filtered.slice((safePage - 1) * SEC_PAGE_SIZE, safePage * SEC_PAGE_SIZE);
+  const abnormalCount = events.filter(e => e.severity !== 'info').length;
 
   return (
     <>
@@ -84,20 +109,26 @@ function PageSecurity() {
         ))}
       </div>
 
-      {/* Tabs */}
-      <div className="ctabs">
-        <div className={`ctab ${tab === 'events' ? 'active' : ''}`} onClick={() => setTab('events')}>
-          <Icon.activity style={{ width: 15, height: 15 }} />異常事件明細
-        </div>
-      </div>
-
+      {/* 事件明細 */}
       <Card title="異常事件明細" icon={<Icon.shieldAlert />}
-        actions={<Btn variant="ghost" size="sm" icon={<Icon.download />}>匯出 CSV</Btn>}>
+        actions={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              className="input"
+              placeholder="搜尋帳號 / 主機 / 類型…"
+              style={{ width: 200, padding: '5px 10px', fontSize: 12 }}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+            <Btn variant="ghost" size="sm" icon={<Icon.download />}>匯出 CSV</Btn>
+          </div>
+        }>
         <div className="tbl-wrap">
           <table>
             <thead>
               <tr>
-                <th>時間</th>
+                <th style={{ minWidth: 130 }}>時間</th>
                 <th>來源主機</th>
                 <th>事件類型</th>
                 <th>帳號</th>
@@ -106,9 +137,9 @@ function PageSecurity() {
               </tr>
             </thead>
             <tbody>
-              {events.map((e, i) => (
+              {paginated.map((e, i) => (
                 <tr key={i}>
-                  <td className="td-mono">{fmtTime(e.occurred_at)}</td>
+                  <td className="td-mono" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fmtTime(e.occurred_at)}</td>
                   <td className="td-mono">{e.source_host}</td>
                   <td>
                     <Pill kind={e.severity === 'err' ? 'err' : e.severity === 'warn' ? 'warn' : 'ok'}>
@@ -120,12 +151,42 @@ function PageSecurity() {
                   <td style={{ fontSize: 12.5, color: '#94a3b8' }}>{e.description}</td>
                 </tr>
               ))}
-              {events.length === 0 && (
-                <tr><td colSpan="6" style={{ textAlign: 'center', color: '#475569', padding: '20px 0' }}>此時間區間無異常事件</td></tr>
+              {paginated.length === 0 && (
+                <tr><td colSpan="6" style={{ textAlign: 'center', color: '#475569', padding: '20px 0' }}>
+                  {q ? `無符合「${search}」的事件` : '此時間區間無異常事件'}
+                </td></tr>
               )}
             </tbody>
           </table>
         </div>
+
+        {/* 分頁控制 */}
+        {totalPages > 1 && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, padding: '0 4px' }}>
+            <span style={{ fontSize: 12, color: '#64748b' }}>
+              共 {filtered.length} 筆，第 {safePage} / {totalPages} 頁
+            </span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className="btn btn-ghost btn-sm" disabled={safePage <= 1}
+                onClick={() => setCurrentPage(1)}>«</button>
+              <button className="btn btn-ghost btn-sm" disabled={safePage <= 1}
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>‹</button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                const start = Math.max(1, Math.min(safePage - 2, totalPages - 4));
+                const pg = start + i;
+                return pg <= totalPages ? (
+                  <button key={pg}
+                    className={`btn btn-sm ${pg === safePage ? 'btn-outline' : 'btn-ghost'}`}
+                    onClick={() => setCurrentPage(pg)}>{pg}</button>
+                ) : null;
+              })}
+              <button className="btn btn-ghost btn-sm" disabled={safePage >= totalPages}
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}>›</button>
+              <button className="btn btn-ghost btn-sm" disabled={safePage >= totalPages}
+                onClick={() => setCurrentPage(totalPages)}>»</button>
+            </div>
+          </div>
+        )}
       </Card>
     </>
   );

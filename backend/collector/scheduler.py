@@ -60,6 +60,13 @@ def _collect_all():
                 log.info("主機 %s 採樣完成", host_ip)
             except Exception as e:
                 log.error("主機 %s 採樣失敗：%s", host_ip, e)
+
+        # 告警規則評估 + 通知
+        try:
+            from notifier.alert_engine import evaluate_and_notify
+            evaluate_and_notify(db)
+        except Exception as e:
+            log.error("告警引擎執行失敗：%s", e)
     finally:
         db.close()
 

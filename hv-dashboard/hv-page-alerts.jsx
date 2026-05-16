@@ -1,26 +1,29 @@
 // Page: 告警規則設定
 const { useState: useStateAl, useEffect: useEffectAl } = React;
 
-const NOTIFY_CONFIG = {
-  smtpHost: 'mail.company.com',
-  smtpPort: 587,
-  from: 'hv-monitor@company.com',
-  itGroup: 'it-team@company.com',
-  mgmtGroup: 'it-manager@company.com',
-  scheduleTime: '08:00',
-};
-
 function PageAlerts() {
   const [tab, setTab] = useStateAl('thresholds');
   const [saved, setSaved] = useStateAl(false);
   const [rules, setRules] = useStateAl([]);
-  const [notify, setNotify] = useStateAl({ ...NOTIFY_CONFIG });
+  const [notify, setNotify] = useStateAl(null);
+  const [notifyLoading, setNotifyLoading] = useStateAl(false);
+  const [testResult, setTestResult] = useStateAl(null);
 
   const { data, loading, error } = useFetch('/api/alerts');
 
   useEffectAl(() => {
     if (data) setRules(data);
   }, [data]);
+
+  // 切換到通知設定 tab 時才載入
+  useEffectAl(() => {
+    if (tab === 'notify' && notify === null) {
+      fetch(`${API_BASE}/api/settings/notify`)
+        .then(r => r.json())
+        .then(d => setNotify(d))
+        .catch(() => setNotify({}));
+    }
+  }, [tab]);
 
   const updateThreshold = (id, val) => {
     setRules(prev => prev.map(r => r.id === id ? { ...r, threshold_value: Number(val) } : r));
@@ -42,7 +45,7 @@ function PageAlerts() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSaveThresholds = async () => {
     for (const r of rules) {
       try {
         await fetch(`${API_BASE}/api/alerts/${r.id}`, {
@@ -56,6 +59,38 @@ function PageAlerts() {
     setTimeout(() => setSaved(false), 2500);
   };
 
+  const handleSaveNotify = async () => {
+    if (!notify) return;
+    setNotifyLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/settings/notify`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(notify),
+      });
+      const d = await r.json();
+      setNotify(d);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch {}
+    setNotifyLoading(false);
+  };
+
+  const handleTestEmail = async () => {
+    setTestResult(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/settings/notify/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient: notify?.alert_email_it || '' }),
+      });
+      const d = await r.json();
+      setTestResult(d);
+    } catch (e) {
+      setTestResult({ ok: false, error: e.message });
+    }
+  };
+
   if (loading) return <LoadingCard />;
   if (error)   return <ErrorCard msg={error} />;
 
@@ -66,6 +101,8 @@ function PageAlerts() {
     acc[cat] = rules.filter(r => r.category === cat);
     return acc;
   }, {});
+
+  const handleSave = tab === 'notify' ? handleSaveNotify : handleSaveThresholds;
 
   return (
     <>
@@ -149,52 +186,65 @@ function PageAlerts() {
       )}
 
       {tab === 'notify' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-          <Card title="SMTP 設定" icon={<Icon.bell />}>
-            {[
-              { label: 'SMTP 主機', key: 'smtpHost', type: 'text' },
-              { label: 'SMTP 連接埠', key: 'smtpPort', type: 'number' },
-              { label: '寄件人地址', key: 'from', type: 'text' },
-            ].map(f => (
-              <div key={f.key} style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
-                <input type={f.type} className="input" style={{ width: '100%' }}
-                  value={notify[f.key]} onChange={e => setNotify(n => ({ ...n, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-          </Card>
-
-          <Card title="收件人設定" icon={<Icon.user />}>
-            {[
-              { label: 'IT 工程師群組（所有告警）', key: 'itGroup' },
-              { label: '主管群組（嚴重 + 日報）',   key: 'mgmtGroup' },
-            ].map(f => (
-              <div key={f.key} style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
-                <input type="text" className="input" style={{ width: '100%' }}
-                  value={notify[f.key]} onChange={e => setNotify(n => ({ ...n, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div>
-              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>每日報告發送時間</div>
-              <input type="time" className="input" style={{ width: 120 }}
-                value={notify.scheduleTime} onChange={e => setNotify(n => ({ ...n, scheduleTime: e.target.value }))} />
-            </div>
-            <div style={{ marginTop: 20, padding: '14px 16px', background: 'var(--bg-1)', borderRadius: 8, border: '1px solid var(--border-1)' }}>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', marginBottom: 8 }}>通知策略</div>
-              {[
-                { label: '嚴重告警', desc: '立即發送 → IT + 主管' },
-                { label: '警告事件', desc: '每小時彙整 → IT 群組' },
-                { label: '每日摘要', desc: `${notify.scheduleTime} 發送 → IT + 主管` },
-              ].map((s, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < 2 ? '1px solid var(--border-1)' : 'none', fontSize: 12 }}>
-                  <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{s.label}</span>
-                  <span style={{ color: '#64748b', fontFamily: 'var(--font-mono)' }}>{s.desc}</span>
+        <>
+          {notify === null ? <LoadingCard /> : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+              <Card title="SMTP 設定" icon={<Icon.bell />}>
+                {[
+                  { label: 'SMTP 主機',   key: 'smtp_host',         type: 'text'   },
+                  { label: 'SMTP 連接埠', key: 'smtp_port',         type: 'number' },
+                  { label: '寄件人地址', key: 'smtp_sender_email',  type: 'text'   },
+                  { label: '寄件人名稱', key: 'smtp_sender_name',   type: 'text'   },
+                ].map(f => (
+                  <div key={f.key} style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
+                    <input type={f.type} className="input" style={{ width: '100%' }}
+                      value={notify[f.key] ?? ''} onChange={e => setNotify(n => ({ ...n, [f.key]: f.type === 'number' ? Number(e.target.value) : e.target.value }))} />
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                  <Btn variant="ghost" size="sm" onClick={handleTestEmail}>發送測試郵件</Btn>
+                  {testResult && (
+                    <span style={{ fontSize: 12, color: testResult.ok ? '#22c55e' : '#ef4444' }}>
+                      {testResult.ok ? '✓ 發送成功' : `✗ ${testResult.error}`}
+                    </span>
+                  )}
                 </div>
-              ))}
+              </Card>
+
+              <Card title="收件人設定" icon={<Icon.user />}>
+                {[
+                  { label: 'IT 工程師群組（所有告警）', key: 'alert_email_it' },
+                  { label: '主管群組（嚴重 + 日報）',   key: 'alert_email_manager' },
+                ].map(f => (
+                  <div key={f.key} style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</div>
+                    <input type="text" className="input" style={{ width: '100%' }}
+                      value={notify[f.key] ?? ''} onChange={e => setNotify(n => ({ ...n, [f.key]: e.target.value }))} />
+                  </div>
+                ))}
+                <div>
+                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>每日報告發送時間</div>
+                  <input type="time" className="input" style={{ width: 120 }}
+                    value={notify.daily_report_time ?? '08:00'} onChange={e => setNotify(n => ({ ...n, daily_report_time: e.target.value }))} />
+                </div>
+                <div style={{ marginTop: 20, padding: '14px 16px', background: 'var(--bg-1)', borderRadius: 8, border: '1px solid var(--border-1)' }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b', marginBottom: 8 }}>通知策略</div>
+                  {[
+                    { label: '嚴重告警', desc: '立即發送 → IT + 主管' },
+                    { label: '警告事件', desc: '每小時彙整 → IT 群組' },
+                    { label: '每日摘要', desc: `${notify.daily_report_time ?? '08:00'} 發送 → IT + 主管` },
+                  ].map((s, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < 2 ? '1px solid var(--border-1)' : 'none', fontSize: 12 }}>
+                      <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{s.label}</span>
+                      <span style={{ color: '#64748b', fontFamily: 'var(--font-mono)' }}>{s.desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
             </div>
-          </Card>
-        </div>
+          )}
+        </>
       )}
     </>
   );

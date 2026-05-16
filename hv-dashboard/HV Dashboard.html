@@ -20,6 +20,8 @@
   <script type="text/babel" src="/static/hv-page-backup.jsx"></script>
   <script type="text/babel" src="/static/hv-page-security.jsx"></script>
   <script type="text/babel" src="/static/hv-page-alerts.jsx"></script>
+  <script type="text/babel" src="/static/hv-page-settings.jsx"></script>
+  <script type="text/babel" src="/static/hv-page-admin.jsx"></script>
 
   <script type="text/babel">
     const { useState, useEffect } = React;
@@ -33,6 +35,35 @@
     function App() {
       const saved = (() => { try { return localStorage.getItem('hvm.page') || 'overview'; } catch(e){ return 'overview'; }})();
       const [page, setPage] = useState(saved);
+      const [badges, setBadges] = useState({});
+
+      // 每 5 分鐘從 /api/overview 更新側邊欄 Badge 計數
+      useEffect(() => {
+        const fetchBadges = () => {
+          fetch((window.HVM_API_BASE || '') + '/api/overview')
+            .then(r => r.ok ? r.json() : null)
+            .then(d => {
+              if (!d) return;
+              const sc = d.section_cards || [];
+              const snap = sc.find(c => c.id === 'snapshots');
+              const bkp  = sc.find(c => c.id === 'backup');
+              const sec  = sc.find(c => c.id === 'security');
+              const snapErr  = snap?.counts?.find(c => c.label === '違規')?.v || 0;
+              const bkpErr   = bkp?.counts?.find(c => c.label === '複寫異常')?.v || 0;
+              const secErr   = sec?.counts?.find(c => c.label === '嚴重')?.v || 0;
+              const secWarn  = sec?.counts?.find(c => c.label === '警告')?.v || 0;
+              setBadges({
+                snapshots: { count: snapErr, kind: 'err' },
+                backup:    { count: bkpErr,  kind: 'err' },
+                security:  { count: secErr || secWarn, kind: secErr > 0 ? 'err' : 'warn' },
+              });
+            })
+            .catch(() => {});
+        };
+        fetchBadges();
+        const t = setInterval(fetchBadges, 5 * 60 * 1000);
+        return () => clearInterval(t);
+      }, []);
 
       const go = (p) => {
         setPage(p);
@@ -46,12 +77,14 @@
         backup:    PageBackup,
         security:  PageSecurity,
         alerts:    PageAlerts,
+        settings:  PageSettings,
+        admin:     PageAdmin,
       };
       const Page = PageMap[page] || PageOverview;
 
       return (
         <div className="hv-app" data-screen-label={page}>
-          <Sidebar page={page} setPage={go} />
+          <Sidebar page={page} setPage={go} badges={badges} />
           <div className="hv-main">
             <Topbar page={page} />
             <div className="content">
