@@ -48,7 +48,7 @@ def _collect_all():
                 client = WinRMClient(host_ip, WINRM_USER, WINRM_PASSWORD)
                 host_record = _get_or_create_host(db, host_ip, host_ip)
 
-                collect_vm_metrics(client, db, host_record)
+                collect_vm_metrics(client, db, host_record, WINRM_USER, WINRM_PASSWORD)
                 collect_snapshots(client, db)
                 collect_replication(client, db)
                 collect_security_events(client, db, host_ip)
