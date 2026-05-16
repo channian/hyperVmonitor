@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     winrm_password: str = ""
     hv_hosts: str = ""          # 逗號分隔，如 "10.10.22.187,10.10.22.188"
 
+    # VM 直連帳密（IS 故障時 fallback 用，帳密與宿主機不同時填入）
+    vm_winrm_user: str = ""     # 留空則沿用 winrm_user
+    vm_winrm_password: str = "" # 留空則沿用 winrm_password
+
     # Email
     smtp_host: str = ""
     smtp_port: int = 25

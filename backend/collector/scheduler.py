@@ -24,6 +24,10 @@ WINRM_USER     = settings.winrm_user
 WINRM_PASSWORD = settings.winrm_password
 HOSTS          = [h.strip() for h in settings.hv_hosts.split(",") if h.strip()]
 
+# VM 直連帳密：留空時自動沿用宿主機帳密
+VM_WINRM_USER     = settings.vm_winrm_user     or WINRM_USER
+VM_WINRM_PASSWORD = settings.vm_winrm_password or WINRM_PASSWORD
+
 
 def _get_or_create_host(db: Session, name: str, ip: str) -> Host:
     host = db.query(Host).filter_by(name=name.upper()).first()
@@ -48,7 +52,7 @@ def _collect_all():
                 client = WinRMClient(host_ip, WINRM_USER, WINRM_PASSWORD)
                 host_record = _get_or_create_host(db, host_ip, host_ip)
 
-                collect_vm_metrics(client, db, host_record, WINRM_USER, WINRM_PASSWORD)
+                collect_vm_metrics(client, db, host_record, VM_WINRM_USER, VM_WINRM_PASSWORD)
                 collect_snapshots(client, db)
                 collect_replication(client, db)
                 collect_security_events(client, db, host_ip)
