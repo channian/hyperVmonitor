@@ -144,8 +144,9 @@ def _get_guest_ram_pressure(
     user = cred.get("user") or default_user
     password = cred.get("password") or default_password
     if not user or not password:
-        log.debug("VM %s 無可用帳密，跳過直連", vm_name)
+        log.warning("VM %s 無可用帳密（vm_credentials.json 未設定此 VM）", vm_name)
         return None
+    log.info("VM %s 嘗試直連 %s 取 RAM（帳號：%s）", vm_name, vm_ip, user)
     try:
         guest = WinRMClient(vm_ip, user, password)
         raw = json.loads(guest.run_ps(_PS_GET_GUEST_RAM))
@@ -153,7 +154,7 @@ def _get_guest_ram_pressure(
         if used > 0 and ram_assigned_gb > 0:
             return round(used / ram_assigned_gb * 100, 1)
     except Exception as e:
-        log.debug("VM %s 直連取 RAM 失敗：%s", vm_name, e)
+        log.warning("VM %s 直連取 RAM 失敗：%s", vm_name, e)
     return None
 
 
@@ -202,6 +203,8 @@ def collect_vm_metrics(
     # --- 載入 VM 個別帳密 + 取 VM IP ---
     vm_creds = _load_vm_credentials()
     vm_ips = _get_vm_ips(client)
+    log.info("vm_credentials.json 已載入 %d 台VM設定：%s", len(vm_creds), list(vm_creds.keys()))
+    log.info("Get-VMNetworkAdapter 取得 %d 個IP：%s", len(vm_ips), vm_ips)
 
     # --- 效能計數器 ---
     counters_raw = json.loads(client.run_ps(_PS_GET_COUNTER))
