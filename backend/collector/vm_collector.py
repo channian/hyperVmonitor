@@ -1,12 +1,33 @@
 """VM 資源收集器：Get-VM + Get-Counter（每 15 分鐘）"""
 import json
 import logging
+import os
 from datetime import datetime
 from sqlalchemy.orm import Session
 from .winrm_client import WinRMClient
 from models import VM, VMMetric, Host, HostMetric
 
 log = logging.getLogger(__name__)
+
+# vm_credentials.json 路徑（backend/ 目錄下）
+_CREDS_FILE = os.path.join(os.path.dirname(__file__), "..", "vm_credentials.json")
+
+
+def _load_vm_credentials() -> dict[str, dict]:
+    """
+    載入 vm_credentials.json，格式：
+    { "VMNAME": { "user": "...", "password": "..." }, ... }
+    VM 名稱統一大寫比對。
+    """
+    try:
+        with open(_CREDS_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+        return {k.upper(): v for k, v in raw.items()}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.warning("載入 vm_credentials.json 失敗：%s", e)
+        return {}
 
 _PS_GET_VM = """
 Get-VM | Select-Object Name, State, ProcessorCount,
@@ -111,20 +132,28 @@ def _get_vm_ips(client: WinRMClient) -> dict[str, str]:
 
 
 def _get_guest_ram_pressure(
+    vm_name: str,
     vm_ip: str,
     ram_assigned_gb: float,
-    winrm_user: str,
-    winrm_password: str,
+    vm_creds: dict[str, dict],
+    default_user: str = "",
+    default_password: str = "",
 ) -> float | None:
     """直連 VM 取 Guest OS 記憶體用量，回傳壓力百分比。失敗回傳 None。"""
+    cred = vm_creds.get(vm_name, {})
+    user = cred.get("user") or default_user
+    password = cred.get("password") or default_password
+    if not user or not password:
+        log.debug("VM %s 無可用帳密，跳過直連", vm_name)
+        return None
     try:
-        guest = WinRMClient(vm_ip, winrm_user, winrm_password)
+        guest = WinRMClient(vm_ip, user, password)
         raw = json.loads(guest.run_ps(_PS_GET_GUEST_RAM))
         used = raw.get("UsedGB", 0)
         if used > 0 and ram_assigned_gb > 0:
             return round(used / ram_assigned_gb * 100, 1)
     except Exception as e:
-        log.debug("VM %s 直連取 RAM 失敗（IS 未修復？）：%s", vm_ip, e)
+        log.debug("VM %s 直連取 RAM 失敗：%s", vm_name, e)
     return None
 
 
@@ -170,8 +199,9 @@ def collect_vm_metrics(
             vm.state = v.get("State", vm.state)
         vm_map[name] = vm
 
-    # --- 取 VM IP（供 IS 損壞的 VM fallback 直連用）---
-    vm_ips = _get_vm_ips(client) if winrm_user else {}
+    # --- 載入 VM 個別帳密 + 取 VM IP ---
+    vm_creds = _load_vm_credentials()
+    vm_ips = _get_vm_ips(client)
 
     # --- 效能計數器 ---
     counters_raw = json.loads(client.run_ps(_PS_GET_COUNTER))
@@ -195,11 +225,12 @@ def collect_vm_metrics(
             demand = raw_vm.get("MemoryDemandGB", 0) or 0
             if demand > 0 and ram_assigned > 0:
                 ram_pressure = round(demand / ram_assigned * 100, 1)
-            elif demand == 0 and winrm_user:
+            elif demand == 0:
                 vm_ip = vm_ips.get(name)
                 if vm_ip:
                     ram_pressure = _get_guest_ram_pressure(
-                        vm_ip, ram_assigned, winrm_user, winrm_password
+                        name, vm_ip, ram_assigned, vm_creds,
+                        default_user=winrm_user, default_password=winrm_password,
                     )
                     if ram_pressure is not None:
                         log.info("VM %s 透過直連取得 RAM 壓力：%.1f%%", name, ram_pressure)

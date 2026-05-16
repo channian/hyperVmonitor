@@ -1,0 +1,13 @@
+# 環境設定（含密碼）
+backend/.env
+backend/vm_credentials.json
+
+# 資料庫
+backend/*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
