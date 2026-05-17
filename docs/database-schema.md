@@ -24,48 +24,67 @@
 
 ---
 
+## 建表執行順序
+
+由於存在 FK 關聯，請依以下順序執行：
+
+```
+1.  owner_groups
+2.  hvm_roles
+3.  hosts          （依賴 owner_groups）
+4.  host_metrics   （依賴 hosts）
+5.  vms            （依賴 hosts）
+6.  vm_metrics     （依賴 vms）
+7.  vm_snapshots   （依賴 vms）
+8.  vm_replication （依賴 vms）
+9.  backup_jobs    （依賴 vms）
+10. security_events
+11. alert_rules
+12. app_settings
+13. hvm_users VIEW （待 AD 欄位確認後建立）
+```
+
+---
+
 ## 1. owner_groups
 
-擁有者群組定義表。用於區分各主機的管理歸屬單位（如 CIM、IT），
-與 `hosts` 表為一對多關係。
+🆕 擁有者群組定義表。用於區分各主機的管理歸屬單位，與 `hosts` 表為一對多關係。
 
 ```sql
 CREATE TABLE owner_groups (
-    id         SERIAL       PRIMARY KEY,
-    name       VARCHAR(64)  NOT NULL UNIQUE,  -- 群組名稱，例如 'CIM'、'IT'
-    created_at TIMESTAMP    NOT NULL DEFAULT NOW()  -- 建立時間
+    id         SERIAL      PRIMARY KEY,
+    name       VARCHAR(64) NOT NULL UNIQUE,
+    created_at TIMESTAMP   NOT NULL DEFAULT NOW()
 );
+
+COMMENT ON TABLE  owner_groups            IS '主機擁有者群組定義（如 CIM、IT）';
+COMMENT ON COLUMN owner_groups.id         IS '主鍵，自動遞增';
+COMMENT ON COLUMN owner_groups.name       IS '群組名稱，不可重複，例如 CIM、IT';
+COMMENT ON COLUMN owner_groups.created_at IS '建立時間';
 
 -- 預設資料
 INSERT INTO owner_groups (name) VALUES ('CIM'), ('IT');
 ```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵，自動遞增 |
-| `name` | VARCHAR(64) | 群組名稱，不可重複，例如 `CIM`、`IT` |
-| `created_at` | TIMESTAMP | 建立時間，預設當下時間 |
-
 ---
 
 ## 2. hvm_roles
 
-儀表板使用者角色表。AD 認證通過後，查此表決定使用者在 HVM 的權限。
-未在此表的 AD 帳號視為一般使用者（預設 `user`）。
+🆕 儀表板使用者角色表。AD 認證通過後查此表決定 HVM 權限。
+未在此表的 AD 帳號以 `is_local_admin` 欄位判斷，兩者皆無則預設 `user`。
 
 ```sql
 CREATE TABLE hvm_roles (
-    username   VARCHAR(64)  PRIMARY KEY,              -- AD 登入帳號（不含網域）
-    role       VARCHAR(16)  NOT NULL DEFAULT 'user',  -- 角色：'admin' | 'user'
-    created_at TIMESTAMP    NOT NULL DEFAULT NOW()    -- 建立時間
+    username   VARCHAR(64) PRIMARY KEY,
+    role       VARCHAR(16) NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP   NOT NULL DEFAULT NOW()
 );
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `username` | VARCHAR(64) | AD 登入帳號，主鍵（不含網域，例如 `john.doe`） |
-| `role` | VARCHAR(16) | 角色：`admin`（管理員）或 `user`（一般使用者） |
-| `created_at` | TIMESTAMP | 建立時間 |
+COMMENT ON TABLE  hvm_roles            IS 'HVM 儀表板使用者角色設定；優先於 AD is_local_admin 欄位';
+COMMENT ON COLUMN hvm_roles.username   IS 'AD 登入帳號（sAMAccountName，不含網域），對應 hvm_users.username';
+COMMENT ON COLUMN hvm_roles.role       IS '角色：admin（管理員）或 user（一般使用者）';
+COMMENT ON COLUMN hvm_roles.created_at IS '建立時間';
+```
 
 **角色權限說明**
 
@@ -74,169 +93,172 @@ CREATE TABLE hvm_roles (
 | `user` | 總覽、資源監控、快照合規、備份/HA、資安監控（唯讀） |
 | `admin` | 全部頁面，含告警設定、系統設定、管理帳號 |
 
+**角色判斷邏輯（方案 C）**
+
+```
+hvm_roles 有記錄  →  使用 hvm_roles.role
+hvm_roles 無記錄  →  is_local_admin = TRUE  →  'admin'
+                  →  is_local_admin = FALSE →  'user'
+```
+
 ---
 
 ## 3. hosts
 
-實體主機清單。包含 Hyper-V 宿主機與一般 Windows Server。
-由排程器自動建立（HV_HOSTS / WS_HOSTS），也可從儀表板手動新增。
+✏️ 實體主機清單。包含 Hyper-V 宿主機與一般 Windows Server。
+由排程器依 `.env` 設定自動建立，也可從儀表板手動新增（非 HV 主機）。
 
 ```sql
 CREATE TABLE hosts (
     id             SERIAL      PRIMARY KEY,
-    name           VARCHAR(64) NOT NULL UNIQUE,               -- 主機識別名稱（IP 或 Hostname）
-    ip             VARCHAR(64) NOT NULL,                      -- WinRM 連線 IP
-    description    TEXT,                                      -- 服務說明，例如「生產環境 Hyper-V 主機 A」
-    host_type      VARCHAR(16) NOT NULL DEFAULT 'hyperv',     -- 主機類型：'hyperv' | 'windows'
-    owner_group_id INTEGER     REFERENCES owner_groups(id),   -- 管理歸屬單位（FK → owner_groups）
-    online         BOOLEAN     NOT NULL DEFAULT TRUE,         -- 連線狀態
-    collected_at   TIMESTAMP   NOT NULL DEFAULT NOW()         -- 最後採樣時間
+    name           VARCHAR(64) NOT NULL UNIQUE,
+    ip             VARCHAR(64) NOT NULL,
+    description    TEXT,
+    host_type      VARCHAR(16) NOT NULL DEFAULT 'hyperv',
+    owner_group_id INTEGER     REFERENCES owner_groups(id),
+    online         BOOLEAN     NOT NULL DEFAULT TRUE,
+    collected_at   TIMESTAMP   NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_hosts_name ON hosts(name);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵，自動遞增 |
-| `name` | VARCHAR(64) | 主機識別名稱，唯一值，通常為 IP 或 Hostname |
-| `ip` | VARCHAR(64) | WinRM 連線用 IP 位址 |
-| `description` | TEXT | 服務說明，人工填寫，例如「廠區 A HV 主機」 |
-| `host_type` | VARCHAR(16) | 主機類型：`hyperv`（Hyper-V 宿主機）或 `windows`（一般 Windows Server） |
-| `owner_group_id` | INTEGER | FK → `owner_groups.id`，管理歸屬單位，可為 NULL |
-| `online` | BOOLEAN | 最後採樣是否連線成功 |
-| `collected_at` | TIMESTAMP | 最後一次成功採樣的時間 |
+COMMENT ON TABLE  hosts                IS '受監控的實體主機清單（Hyper-V 宿主機或一般 Windows Server）';
+COMMENT ON COLUMN hosts.id             IS '主鍵，自動遞增';
+COMMENT ON COLUMN hosts.name          IS '主機識別名稱，唯一值；自動建立時填入 IP，可改為 Hostname';
+COMMENT ON COLUMN hosts.ip            IS 'WinRM 連線用 IP 位址';
+COMMENT ON COLUMN hosts.description   IS '服務說明，人工填寫，例如：廠區 A 生產環境 Hyper-V 主機';
+COMMENT ON COLUMN hosts.host_type     IS '主機類型：hyperv（Hyper-V 宿主機）或 windows（一般 Windows Server）';
+COMMENT ON COLUMN hosts.owner_group_id IS '管理歸屬單位，FK → owner_groups.id；NULL 表示未指定';
+COMMENT ON COLUMN hosts.online        IS '最後採樣是否連線成功';
+COMMENT ON COLUMN hosts.collected_at  IS '最後一次成功採樣的時間';
+```
 
 ---
 
 ## 4. host_metrics
 
-實體主機資源使用量，每 15 分鐘採樣一次寫入。
+✅ 實體主機資源使用量，每 15 分鐘採樣一次寫入。
 
 ```sql
 CREATE TABLE host_metrics (
     id               SERIAL    PRIMARY KEY,
-    host_id          INTEGER   NOT NULL REFERENCES hosts(id),  -- 所屬主機（FK → hosts）
-    cpu_pct          FLOAT     NOT NULL,                       -- CPU 使用率（%）
-    ram_used_gb      FLOAT     NOT NULL,                       -- 已用記憶體（GB）
-    ram_total_gb     FLOAT     NOT NULL,                       -- 總記憶體（GB）
-    storage_used_tb  FLOAT     NOT NULL,                       -- C 槽已用空間（TB）
-    storage_total_tb FLOAT     NOT NULL,                       -- C 槽總容量（TB）
-    collected_at     TIMESTAMP NOT NULL DEFAULT NOW()          -- 採樣時間
+    host_id          INTEGER   NOT NULL REFERENCES hosts(id),
+    cpu_pct          FLOAT     NOT NULL,
+    ram_used_gb      FLOAT     NOT NULL,
+    ram_total_gb     FLOAT     NOT NULL,
+    storage_used_tb  FLOAT     NOT NULL,
+    storage_total_tb FLOAT     NOT NULL,
+    collected_at     TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_host_metrics_host_id      ON host_metrics(host_id);
 CREATE INDEX ix_host_metrics_collected_at ON host_metrics(collected_at);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `host_id` | INTEGER | FK → `hosts.id` |
-| `cpu_pct` | FLOAT | CPU 整體使用率（`\Processor(_Total)\% Processor Time`） |
-| `ram_used_gb` | FLOAT | 已使用記憶體（GB） |
-| `ram_total_gb` | FLOAT | 實體記憶體總量（GB） |
-| `storage_used_tb` | FLOAT | C 槽已用空間（TB） |
-| `storage_total_tb` | FLOAT | C 槽總容量（TB） |
-| `collected_at` | TIMESTAMP | 採樣時間 |
+COMMENT ON TABLE  host_metrics                  IS '實體主機資源使用量，每 15 分鐘採樣';
+COMMENT ON COLUMN host_metrics.id               IS '主鍵，自動遞增';
+COMMENT ON COLUMN host_metrics.host_id          IS 'FK → hosts.id';
+COMMENT ON COLUMN host_metrics.cpu_pct          IS 'CPU 整體使用率（%）；來源：\Processor(_Total)\% Processor Time';
+COMMENT ON COLUMN host_metrics.ram_used_gb      IS '已使用記憶體（GB）；來源：Win32_OperatingSystem';
+COMMENT ON COLUMN host_metrics.ram_total_gb     IS '實體記憶體總量（GB）';
+COMMENT ON COLUMN host_metrics.storage_used_tb  IS 'C 槽已用空間（TB）；來源：Get-PSDrive C';
+COMMENT ON COLUMN host_metrics.storage_total_tb IS 'C 槽總容量（TB）';
+COMMENT ON COLUMN host_metrics.collected_at     IS '採樣時間（UTC）';
+```
 
 ---
 
 ## 5. vms
 
-虛擬機器清單，由 `Get-VM` 取得並同步。名稱統一大寫儲存。
+✅ 虛擬機器清單，由 `Get-VM` 取得並每 15 分鐘同步。名稱統一大寫儲存。
 
 ```sql
 CREATE TABLE vms (
     id      SERIAL      PRIMARY KEY,
-    name    VARCHAR(64) NOT NULL UNIQUE,           -- VM 名稱（大寫正規化）
-    host_id INTEGER     NOT NULL REFERENCES hosts(id),  -- 所屬宿主機（FK → hosts）
-    vcpu    INTEGER     NOT NULL,                  -- 配置的虛擬 CPU 數量
-    ram_gb  FLOAT       NOT NULL,                  -- 配置的記憶體（GB）
-    tier    VARCHAR(16) NOT NULL DEFAULT 'Tier2',  -- 服務等級：'Tier1' | 'Tier2'
-    is_sql  BOOLEAN     NOT NULL DEFAULT FALSE,    -- 是否為 SQL Server VM（快照即違規）
-    state   VARCHAR(32) NOT NULL DEFAULT 'Running' -- VM 狀態（Running / Off / Saved 等）
+    name    VARCHAR(64) NOT NULL UNIQUE,
+    host_id INTEGER     NOT NULL REFERENCES hosts(id),
+    vcpu    INTEGER     NOT NULL,
+    ram_gb  FLOAT       NOT NULL,
+    tier    VARCHAR(16) NOT NULL DEFAULT 'Tier2',
+    is_sql  BOOLEAN     NOT NULL DEFAULT FALSE,
+    state   VARCHAR(32) NOT NULL DEFAULT 'Running'
 );
 
 CREATE INDEX ix_vms_name ON vms(name);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `name` | VARCHAR(64) | VM 名稱，統一大寫，唯一值 |
-| `host_id` | INTEGER | FK → `hosts.id`，所屬 Hyper-V 宿主機 |
-| `vcpu` | INTEGER | 配置的 vCPU 核心數 |
-| `ram_gb` | FLOAT | 配置的記憶體大小（GB） |
-| `tier` | VARCHAR(16) | 服務等級：`Tier1`（關鍵）或 `Tier2`（一般） |
-| `is_sql` | BOOLEAN | `TRUE` 表示 SQL Server VM，有快照即判定為嚴重違規 |
-| `state` | VARCHAR(32) | VM 執行狀態（來自 Hyper-V `Get-VM`） |
+COMMENT ON TABLE  vms         IS '虛擬機器清單；名稱統一大寫正規化，每 15 分鐘由 Get-VM 同步';
+COMMENT ON COLUMN vms.id      IS '主鍵，自動遞增';
+COMMENT ON COLUMN vms.name    IS 'VM 名稱，統一大寫，唯一值';
+COMMENT ON COLUMN vms.host_id IS 'FK → hosts.id，所屬 Hyper-V 宿主機';
+COMMENT ON COLUMN vms.vcpu    IS '配置的 vCPU 核心數';
+COMMENT ON COLUMN vms.ram_gb  IS '配置的記憶體大小（GB）；動態記憶體取 MemoryAssigned';
+COMMENT ON COLUMN vms.tier    IS '服務等級：Tier1（關鍵業務）或 Tier2（一般）';
+COMMENT ON COLUMN vms.is_sql  IS 'TRUE 表示 SQL Server VM；有任何快照即判定為嚴重違規';
+COMMENT ON COLUMN vms.state   IS 'VM 執行狀態；來源：Get-VM（Running / Off / Saved / Paused）';
+```
 
 ---
 
 ## 6. vm_metrics
 
-VM 資源使用量，每 15 分鐘採樣一次。
+✅ VM 資源使用量，每 15 分鐘採樣一次。
 
 ```sql
 CREATE TABLE vm_metrics (
     id               SERIAL    PRIMARY KEY,
-    vm_id            INTEGER   NOT NULL REFERENCES vms(id),  -- 所屬 VM（FK → vms）
-    cpu_pct          FLOAT     NOT NULL,                     -- vCPU 平均使用率（%）
-    ram_used_gb      FLOAT     NOT NULL,                     -- 宿主機分配給 VM 的記憶體（GB）
-    ram_pressure_pct FLOAT,                                  -- RAM 壓力百分比（可為 NULL）
-    net_in_kbps      FLOAT     NOT NULL DEFAULT 0,           -- 網路接收速率（KB/s）
-    net_out_kbps     FLOAT     NOT NULL DEFAULT 0,           -- 網路傳送速率（KB/s）
-    collected_at     TIMESTAMP NOT NULL DEFAULT NOW()        -- 採樣時間
+    vm_id            INTEGER   NOT NULL REFERENCES vms(id),
+    cpu_pct          FLOAT     NOT NULL,
+    ram_used_gb      FLOAT     NOT NULL,
+    ram_pressure_pct FLOAT,
+    net_in_kbps      FLOAT     NOT NULL DEFAULT 0,
+    net_out_kbps     FLOAT     NOT NULL DEFAULT 0,
+    collected_at     TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_vm_metrics_vm_id        ON vm_metrics(vm_id);
 CREATE INDEX ix_vm_metrics_collected_at ON vm_metrics(collected_at);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `vm_id` | INTEGER | FK → `vms.id` |
-| `cpu_pct` | FLOAT | 所有 vCPU 的平均 Guest Run Time（%） |
-| `ram_used_gb` | FLOAT | 宿主機 MemoryAssigned 值（GB） |
-| `ram_pressure_pct` | FLOAT | RAM 壓力（%）；IS 正常時 = Demand/Assigned，IS 故障時由直連 Guest OS 計算，無法取得時為 NULL |
-| `net_in_kbps` | FLOAT | 所有虛擬網卡接收速率加總（KB/s） |
-| `net_out_kbps` | FLOAT | 所有虛擬網卡傳送速率加總（KB/s） |
-| `collected_at` | TIMESTAMP | 採樣時間 |
+COMMENT ON TABLE  vm_metrics                  IS 'VM 資源使用量，每 15 分鐘採樣';
+COMMENT ON COLUMN vm_metrics.id               IS '主鍵，自動遞增';
+COMMENT ON COLUMN vm_metrics.vm_id            IS 'FK → vms.id';
+COMMENT ON COLUMN vm_metrics.cpu_pct          IS '所有 vCPU 的平均 Guest Run Time（%）；來源：Hyper-V Hypervisor Virtual Processor(*)\% Guest Run Time';
+COMMENT ON COLUMN vm_metrics.ram_used_gb      IS '宿主機分配給 VM 的記憶體（GB）；來源：MemoryAssigned';
+COMMENT ON COLUMN vm_metrics.ram_pressure_pct IS 'RAM 壓力（%）；IS 正常：Demand/Assigned；IS 故障：直連 Guest OS 計算；無法取得時為 NULL';
+COMMENT ON COLUMN vm_metrics.net_in_kbps      IS '所有虛擬網卡接收速率加總（KB/s）；來源：Hyper-V Virtual Network Adapter(*)\Bytes Received/sec';
+COMMENT ON COLUMN vm_metrics.net_out_kbps     IS '所有虛擬網卡傳送速率加總（KB/s）；來源：Hyper-V Virtual Network Adapter(*)\Bytes Sent/sec';
+COMMENT ON COLUMN vm_metrics.collected_at     IS '採樣時間（UTC）';
+```
 
 ---
 
 ## 7. vm_snapshots
 
-VM 快照紀錄，每 15 分鐘由 `Get-VMSnapshot` 採集，去重後寫入。
+✅ VM 快照紀錄，每 15 分鐘由 `Get-VMSnapshot` 採集，去重後寫入。
 
 ```sql
 CREATE TABLE vm_snapshots (
     id            SERIAL       PRIMARY KEY,
-    vm_id         INTEGER      NOT NULL REFERENCES vms(id),  -- 所屬 VM（FK → vms）
-    snapshot_name VARCHAR(256) NOT NULL,                     -- 快照名稱
-    created_at    TIMESTAMP    NOT NULL,                     -- 快照建立時間（來自 Hyper-V）
-    detected_at   TIMESTAMP    NOT NULL DEFAULT NOW()        -- 系統首次偵測到此快照的時間
+    vm_id         INTEGER      NOT NULL REFERENCES vms(id),
+    snapshot_name VARCHAR(256) NOT NULL,
+    created_at    TIMESTAMP    NOT NULL,
+    detected_at   TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_vm_snapshots_vm_id      ON vm_snapshots(vm_id);
 CREATE INDEX ix_vm_snapshots_created_at ON vm_snapshots(created_at);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `vm_id` | INTEGER | FK → `vms.id` |
-| `snapshot_name` | VARCHAR(256) | 快照名稱（`Get-VMSnapshot` 回傳） |
-| `created_at` | TIMESTAMP | 快照實際建立時間（用於計算存在天數） |
-| `detected_at` | TIMESTAMP | 系統首次偵測到此快照的時間 |
+COMMENT ON TABLE  vm_snapshots               IS 'VM 快照紀錄；每 15 分鐘採集，依 vm_id + snapshot_name 去重';
+COMMENT ON COLUMN vm_snapshots.id            IS '主鍵，自動遞增';
+COMMENT ON COLUMN vm_snapshots.vm_id         IS 'FK → vms.id';
+COMMENT ON COLUMN vm_snapshots.snapshot_name IS '快照名稱；來源：Get-VMSnapshot';
+COMMENT ON COLUMN vm_snapshots.created_at    IS '快照實際建立時間；用於計算存在天數，判斷合規狀態';
+COMMENT ON COLUMN vm_snapshots.detected_at   IS '系統首次偵測到此快照的時間';
+```
 
 **快照合規規則**
 
 | VM 類型 | 條件 | 判定 |
 |---|---|---|
-| SQL Server（`is_sql=TRUE`） | 有任何快照 | 🔴 嚴重違規 |
+| SQL Server（`is_sql = TRUE`） | 有任何快照 | 🔴 嚴重違規 |
 | 一般 VM | 快照存在 > 7 天 | 🔴 嚴重違規 |
 | 一般 VM | 快照存在 3–7 天 | 🟡 警告 |
 | 一般 VM | 快照存在 ≤ 3 天 | 🟢 合規 |
@@ -245,99 +267,96 @@ CREATE INDEX ix_vm_snapshots_created_at ON vm_snapshots(created_at);
 
 ## 8. vm_replication
 
-VM Hyper-V 複寫狀態，每 15 分鐘由 `Get-VMReplication` 採集。
+✅ VM Hyper-V 複寫狀態，每 15 分鐘由 `Get-VMReplication` 採集。
 
 ```sql
 CREATE TABLE vm_replication (
     id                    SERIAL      PRIMARY KEY,
-    vm_id                 INTEGER     NOT NULL REFERENCES vms(id),  -- 所屬 VM（FK → vms）
-    replication_state     VARCHAR(64) NOT NULL,   -- 複寫作業狀態
-    replication_health    VARCHAR(64) NOT NULL,   -- 複寫健康狀態
-    last_replication_time TIMESTAMP,              -- 最後一次成功複寫的時間
-    rpo_minutes           INTEGER     NOT NULL DEFAULT 15,  -- RPO 目標（分鐘）
-    collected_at          TIMESTAMP   NOT NULL DEFAULT NOW()  -- 採樣時間
+    vm_id                 INTEGER     NOT NULL REFERENCES vms(id),
+    replication_state     VARCHAR(64) NOT NULL,
+    replication_health    VARCHAR(64) NOT NULL,
+    last_replication_time TIMESTAMP,
+    rpo_minutes           INTEGER     NOT NULL DEFAULT 15,
+    collected_at          TIMESTAMP   NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_vm_replication_vm_id        ON vm_replication(vm_id);
 CREATE INDEX ix_vm_replication_collected_at ON vm_replication(collected_at);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `vm_id` | INTEGER | FK → `vms.id` |
-| `replication_state` | VARCHAR(64) | 複寫作業狀態，例如 `Normal`、`Error`、`Suspended` |
-| `replication_health` | VARCHAR(64) | 複寫健康，例如 `Normal`、`Warning`、`Critical` |
-| `last_replication_time` | TIMESTAMP | 最後成功複寫時間，用於計算落後時間 |
-| `rpo_minutes` | INTEGER | RPO 目標值（分鐘），預設 15 分鐘 |
-| `collected_at` | TIMESTAMP | 採樣時間 |
+COMMENT ON TABLE  vm_replication                       IS 'VM 複寫狀態；每 15 分鐘由 Get-VMReplication 採集';
+COMMENT ON COLUMN vm_replication.id                    IS '主鍵，自動遞增';
+COMMENT ON COLUMN vm_replication.vm_id                 IS 'FK → vms.id';
+COMMENT ON COLUMN vm_replication.replication_state     IS '複寫作業狀態；來源：Get-VMReplication（Normal / Error / Suspended）';
+COMMENT ON COLUMN vm_replication.replication_health    IS '複寫健康狀態；來源：Get-VMReplication（Normal / Warning / Critical）';
+COMMENT ON COLUMN vm_replication.last_replication_time IS '最後成功複寫時間；用於計算落後分鐘數';
+COMMENT ON COLUMN vm_replication.rpo_minutes           IS 'RPO 目標值（分鐘）；預設 15 分鐘';
+COMMENT ON COLUMN vm_replication.collected_at          IS '採樣時間（UTC）';
+```
 
 ---
 
 ## 9. backup_jobs
 
-Veeam 備份作業結果（待 Veeam 採購確認後實作採集）。
+✅ Veeam 備份作業結果。（採集器待 Veeam 採購確認後實作）
 
 ```sql
 CREATE TABLE backup_jobs (
     id           SERIAL       PRIMARY KEY,
-    vm_id        INTEGER      NOT NULL REFERENCES vms(id),  -- 所屬 VM（FK → vms）
-    job_name     VARCHAR(128) NOT NULL,  -- Veeam 備份 Job 名稱
-    result       VARCHAR(32)  NOT NULL,  -- 作業結果
-    start_time   TIMESTAMP    NOT NULL,  -- 備份開始時間
-    end_time     TIMESTAMP,              -- 備份結束時間（進行中時為 NULL）
-    collected_at TIMESTAMP    NOT NULL DEFAULT NOW()  -- 寫入時間
+    vm_id        INTEGER      NOT NULL REFERENCES vms(id),
+    job_name     VARCHAR(128) NOT NULL,
+    result       VARCHAR(32)  NOT NULL,
+    start_time   TIMESTAMP    NOT NULL,
+    end_time     TIMESTAMP,
+    collected_at TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_backup_jobs_vm_id        ON backup_jobs(vm_id);
 CREATE INDEX ix_backup_jobs_collected_at ON backup_jobs(collected_at);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `vm_id` | INTEGER | FK → `vms.id` |
-| `job_name` | VARCHAR(128) | Veeam 備份 Job 名稱 |
-| `result` | VARCHAR(32) | 作業結果：`Success`、`Failed`、`Warning` |
-| `start_time` | TIMESTAMP | 備份開始時間 |
-| `end_time` | TIMESTAMP | 備份結束時間，進行中時為 NULL |
-| `collected_at` | TIMESTAMP | 資料寫入時間 |
+COMMENT ON TABLE  backup_jobs             IS 'Veeam 備份作業結果；採集器待 Veeam 採購確認後實作';
+COMMENT ON COLUMN backup_jobs.id          IS '主鍵，自動遞增';
+COMMENT ON COLUMN backup_jobs.vm_id       IS 'FK → vms.id';
+COMMENT ON COLUMN backup_jobs.job_name    IS 'Veeam 備份 Job 名稱';
+COMMENT ON COLUMN backup_jobs.result      IS '作業結果：Success / Failed / Warning';
+COMMENT ON COLUMN backup_jobs.start_time  IS '備份開始時間';
+COMMENT ON COLUMN backup_jobs.end_time    IS '備份結束時間；進行中時為 NULL';
+COMMENT ON COLUMN backup_jobs.collected_at IS '資料寫入時間（UTC）';
+```
 
 ---
 
 ## 10. security_events
 
-Windows 安全事件紀錄，每 5 分鐘採集一次，去重後寫入。
+✅ Windows 安全事件紀錄，每 5 分鐘採集，依來源主機 + Event ID + 發生時間去重。
 
 ```sql
 CREATE TABLE security_events (
     id           SERIAL       PRIMARY KEY,
-    source_host  VARCHAR(64)  NOT NULL,           -- 事件來源主機（IP 或 Hostname）
-    event_id     INTEGER      NOT NULL,            -- Windows Event ID
-    event_type   VARCHAR(64)  NOT NULL,            -- 事件分類
-    account      VARCHAR(128) NOT NULL,            -- 相關帳號
-    description  TEXT         NOT NULL DEFAULT '', -- 事件說明
-    severity     VARCHAR(16)  NOT NULL DEFAULT 'warn',  -- 嚴重度
-    occurred_at  TIMESTAMP    NOT NULL,            -- 事件發生時間
-    collected_at TIMESTAMP    NOT NULL DEFAULT NOW()    -- 採集時間
+    source_host  VARCHAR(64)  NOT NULL,
+    event_id     INTEGER      NOT NULL,
+    event_type   VARCHAR(64)  NOT NULL,
+    account      VARCHAR(128) NOT NULL,
+    description  TEXT         NOT NULL DEFAULT '',
+    severity     VARCHAR(16)  NOT NULL DEFAULT 'warn',
+    occurred_at  TIMESTAMP    NOT NULL,
+    collected_at TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_security_events_source_host ON security_events(source_host);
 CREATE INDEX ix_security_events_event_id    ON security_events(event_id);
 CREATE INDEX ix_security_events_occurred_at ON security_events(occurred_at);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `source_host` | VARCHAR(64) | 事件來源主機 IP 或名稱 |
-| `event_id` | INTEGER | Windows Event ID（4624 / 4625 / 4728 / 4732 / 4740） |
-| `event_type` | VARCHAR(64) | 分類：`login_success`、`login_fail`、`lockout`、`group_change` |
-| `account` | VARCHAR(128) | 事件相關帳號 |
-| `description` | TEXT | 事件說明文字 |
-| `severity` | VARCHAR(16) | 嚴重度：`err`、`warn`、`info` |
-| `occurred_at` | TIMESTAMP | 事件實際發生時間（來自 Windows Event Log） |
-| `collected_at` | TIMESTAMP | 系統採集並寫入的時間 |
+COMMENT ON TABLE  security_events             IS 'Windows 安全事件紀錄；每 5 分鐘採集，依來源主機 + Event ID + 發生時間去重';
+COMMENT ON COLUMN security_events.id          IS '主鍵，自動遞增';
+COMMENT ON COLUMN security_events.source_host IS '事件來源主機 IP 或名稱';
+COMMENT ON COLUMN security_events.event_id    IS 'Windows Event ID（4624 / 4625 / 4728 / 4732 / 4740）';
+COMMENT ON COLUMN security_events.event_type  IS '事件分類：login_success / login_fail / lockout / group_change';
+COMMENT ON COLUMN security_events.account     IS '事件相關帳號（Windows Security Log 中的 SubjectUserName）';
+COMMENT ON COLUMN security_events.description IS '事件說明文字';
+COMMENT ON COLUMN security_events.severity    IS '嚴重度：err（嚴重）/ warn（警告）/ info（資訊）';
+COMMENT ON COLUMN security_events.occurred_at IS '事件實際發生時間（來自 Windows Event Log TimeCreated）';
+COMMENT ON COLUMN security_events.collected_at IS '系統採集並寫入的時間（UTC）';
+```
 
 **Event ID 對應**
 
@@ -353,60 +372,57 @@ CREATE INDEX ix_security_events_occurred_at ON security_events(occurred_at);
 
 ## 11. alert_rules
 
-告警規則設定，由前端儀表板管理。首次啟動時自動寫入預設規則。
+✅ 告警規則設定，由前端儀表板管理。首次啟動時自動寫入預設規則。
 
 ```sql
 CREATE TABLE alert_rules (
     id               SERIAL       PRIMARY KEY,
-    rule_name        VARCHAR(128) NOT NULL UNIQUE,  -- 規則名稱
-    category         VARCHAR(64)  NOT NULL,          -- 規則分類
-    enabled          BOOLEAN      NOT NULL DEFAULT TRUE,  -- 是否啟用
-    severity         VARCHAR(16)  NOT NULL,          -- 嚴重度
-    threshold_value  FLOAT,                          -- 門檻數值（NULL 表示觸發即告警）
-    threshold_unit   VARCHAR(32),                    -- 門檻單位說明
-    notify_immediate BOOLEAN      NOT NULL DEFAULT TRUE,  -- 是否即時通知
-    description      TEXT         NOT NULL DEFAULT '',    -- 規則說明
-    updated_at       TIMESTAMP    NOT NULL DEFAULT NOW()  -- 最後修改時間
+    rule_name        VARCHAR(128) NOT NULL UNIQUE,
+    category         VARCHAR(64)  NOT NULL,
+    enabled          BOOLEAN      NOT NULL DEFAULT TRUE,
+    severity         VARCHAR(16)  NOT NULL,
+    threshold_value  FLOAT,
+    threshold_unit   VARCHAR(32),
+    notify_immediate BOOLEAN      NOT NULL DEFAULT TRUE,
+    description      TEXT         NOT NULL DEFAULT '',
+    updated_at       TIMESTAMP    NOT NULL DEFAULT NOW()
 );
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `rule_name` | VARCHAR(128) | 規則名稱，唯一值 |
-| `category` | VARCHAR(64) | 分類：`resource`、`snapshot`、`backup`、`security` |
-| `enabled` | BOOLEAN | 是否啟用此規則 |
-| `severity` | VARCHAR(16) | 嚴重度：`err`（嚴重）或 `warn`（警告） |
-| `threshold_value` | FLOAT | 門檻數值；`NULL` 表示事件發生即觸發 |
-| `threshold_unit` | VARCHAR(32) | 門檻單位說明，例如 `%`、`天`、`次/10min` |
-| `notify_immediate` | BOOLEAN | `TRUE` = 即時通知；`FALSE` = 彙整後通知 |
-| `description` | TEXT | 規則說明文字 |
-| `updated_at` | TIMESTAMP | 最後修改時間 |
+COMMENT ON TABLE  alert_rules                  IS '告警規則設定；首次啟動自動寫入預設規則，可從儀表板調整';
+COMMENT ON COLUMN alert_rules.id               IS '主鍵，自動遞增';
+COMMENT ON COLUMN alert_rules.rule_name        IS '規則名稱，唯一值，顯示於儀表板';
+COMMENT ON COLUMN alert_rules.category         IS '規則分類：resource / snapshot / backup / security';
+COMMENT ON COLUMN alert_rules.enabled          IS '是否啟用此規則';
+COMMENT ON COLUMN alert_rules.severity         IS '嚴重度：err（嚴重）或 warn（警告）';
+COMMENT ON COLUMN alert_rules.threshold_value  IS '門檻數值；NULL 表示事件發生即觸發，不需比較數值';
+COMMENT ON COLUMN alert_rules.threshold_unit   IS '門檻單位說明，例如 %、天、次/10min；NULL 表示無門檻';
+COMMENT ON COLUMN alert_rules.notify_immediate IS 'TRUE = 觸發即時通知；FALSE = 彙整後於排程時間發送';
+COMMENT ON COLUMN alert_rules.description      IS '規則說明文字，顯示於儀表板告警設定頁';
+COMMENT ON COLUMN alert_rules.updated_at       IS '最後修改時間（UTC）';
+```
 
 ---
 
 ## 12. app_settings
 
-應用程式 Key-Value 設定儲存。UI 儲存的通知設定（SMTP / Webhook）存於此表，
-優先權高於 `.env` 檔案。
+✅ 應用程式 Key-Value 設定儲存。UI 儲存的通知設定（SMTP / Webhook）存於此表，優先權高於 `.env`。
 
 ```sql
 CREATE TABLE app_settings (
     id         SERIAL       PRIMARY KEY,
-    key        VARCHAR(128) NOT NULL UNIQUE,  -- 設定鍵名
-    value      TEXT         NOT NULL DEFAULT '',  -- 設定值（字串，布林值存 'true'/'false'）
-    updated_at TIMESTAMP    NOT NULL DEFAULT NOW()  -- 最後更新時間
+    key        VARCHAR(128) NOT NULL UNIQUE,
+    value      TEXT         NOT NULL DEFAULT '',
+    updated_at TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX ix_app_settings_key ON app_settings(key);
-```
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| `id` | SERIAL | 主鍵 |
-| `key` | VARCHAR(128) | 設定鍵名，唯一值（例如 `smtp_host`、`alert_email_it`） |
-| `value` | TEXT | 設定值，統一以字串儲存（布林值存 `true`/`false`） |
-| `updated_at` | TIMESTAMP | 最後更新時間 |
+COMMENT ON TABLE  app_settings            IS '應用程式 Key-Value 設定；由儀表板 UI 寫入，優先於 .env 環境變數';
+COMMENT ON COLUMN app_settings.id         IS '主鍵，自動遞增';
+COMMENT ON COLUMN app_settings.key        IS '設定鍵名，唯一值（例如 smtp_host、alert_email_it）';
+COMMENT ON COLUMN app_settings.value      IS '設定值，統一以字串儲存；布林值存 true/false，數字存數字字串';
+COMMENT ON COLUMN app_settings.updated_at IS '最後更新時間（UTC）';
+```
 
 **常用 Key 清單**
 
@@ -419,59 +435,65 @@ CREATE INDEX ix_app_settings_key ON app_settings(key);
 | `alert_email_it` | IT 工程師收件信箱（逗號分隔多位） |
 | `alert_email_manager` | 主管收件信箱（逗號分隔多位） |
 | `daily_report_time` | 每日報告發送時間（HH:MM） |
-| `webhook_enable` | Webhook 推播開關（`true`/`false`） |
+| `webhook_enable` | Webhook 推播開關（`true` / `false`） |
 | `webhook_url` | Webhook 推播 URL |
 | `webhook_token` | Webhook 驗證 Token |
+| `webhook_body_template` | Webhook Body 模板（含 `{{$variable}}` 佔位符） |
 
 ---
 
 ## 13. hvm_users VIEW
 
-AD 使用者視圖，由現有 AD 資料庫的 TABLE 映射而來。
-**待確認 AD TABLE 欄位後建立。**
+⏳ AD 使用者視圖，從現有 AD 資料庫的 `public.users` 映射而來。
+密碼驗證透過 LDAP NTLM Bind，VIEW 僅提供使用者資訊與角色判斷所需欄位。
 
 ```sql
--- 範本，欄位名稱待確認後替換
-CREATE VIEW hvm_users AS
+CREATE OR REPLACE VIEW hvm_users AS
 SELECT
-    <ad_account_column>    AS username,      -- AD 登入帳號
-    <ad_dept_column>       AS department,    -- 所屬部門
-    <ad_name_column>       AS display_name,  -- 顯示名稱
-    <ad_email_column>      AS email          -- 電子郵件
-FROM <your_ad_table>
-WHERE <dept_filter_condition>;               -- 限定有存取權的部門
+    username,        -- AD 登入帳號（sAMAccountName）
+    display_name,    -- 顯示名稱
+    email,           -- 電子郵件
+    department,      -- 所屬部門
+    title,           -- 職稱（顯示用）
+    is_local_admin   -- 本機管理員旗標（角色判斷 fallback 用）
+FROM public.users
+WHERE <你的部門過濾條件>;
+
+COMMENT ON VIEW hvm_users IS 'AD 使用者視圖；LDAP NTLM 驗證通過後查此 VIEW 確認存取權與角色';
 ```
 
-**認證流程說明**
+**AD 認證流程**
 
 ```
-使用者輸入帳密
+使用者輸入 username + password
     │
-    ├─ LDAP Bind 驗證密碼（不存密碼在 DB）
+    ├─ LDAP NTLM Bind（ldap3）→ 驗證密碼
+    │   └─ 失敗 → 嘗試本機管理員（SHA-256，存於 .env）
     │
-    ├─ 查 hvm_users VIEW → 確認帳號存在 + 讀取部門
+    ├─ 查 hvm_users VIEW → 確認帳號在允許部門內
     │
-    └─ 查 hvm_roles TABLE → 取得 HVM 角色（無記錄預設 'user'）
+    └─ 決定 HVM 角色
+        ├─ hvm_roles 有記錄  → 使用 hvm_roles.role
+        └─ hvm_roles 無記錄  → is_local_admin = TRUE  → 'admin'
+                             → is_local_admin = FALSE → 'user'
+
+    → 簽發 JWT（httpOnly Cookie）
+    → payload：{ username, role, display_name }
 ```
 
----
+**JWT 相關 .env 設定**
 
-## 建表執行順序
+```env
+# AD / LDAP
+LDAP_SERVER=ldap://your-ad-server
+LDAP_DOMAIN=COMPANY
+LDAP_BASE_DN=DC=company,DC=local
 
-由於存在 FK 關聯，請依以下順序執行：
+# JWT
+SECRET_KEY=請換成隨機長字串
+ACCESS_TOKEN_EXPIRE_MINUTES=480
 
-```
-1. owner_groups
-2. hvm_roles
-3. hosts          （依賴 owner_groups）
-4. host_metrics   （依賴 hosts）
-5. vms            （依賴 hosts）
-6. vm_metrics     （依賴 vms）
-7. vm_snapshots   （依賴 vms）
-8. vm_replication （依賴 vms）
-9. backup_jobs    （依賴 vms）
-10. security_events
-11. alert_rules
-12. app_settings
-13. hvm_users VIEW （待 AD 欄位確認後建立）
+# 本機管理員（LDAP 故障時 fallback）
+LOCAL_ADMIN_USERNAME=hvm_admin
+LOCAL_ADMIN_PASSWORD_HASH=   # hashlib.sha256("密碼".encode()).hexdigest()
 ```
