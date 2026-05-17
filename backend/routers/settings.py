@@ -1,10 +1,10 @@
 """系統設定 API：通知設定（SMTP / Webhook）的 GET/PATCH + 測試發送。"""
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from database import get_db, settings as env_settings
-from models import AppSetting, Host, VM
+from models import AppSetting, Host, VM, OwnerGroup
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -128,3 +128,97 @@ def get_system_info(db: Session = Depends(get_db)):
         "dashboard_url": env_settings.dashboard_url,
         "webhook_configured": cfg.webhook_enable and bool(cfg.webhook_url),
     }
+
+
+class OwnerGroupItem(BaseModel):
+    id: int
+    name: str
+
+class HostItem(BaseModel):
+    id: int
+    name: str
+    ip: str
+    description: str | None
+    host_type: str
+    owner_group_id: int | None
+    owner_group_name: str | None
+    online: bool
+
+class HostCreate(BaseModel):
+    ip: str
+    description: str | None = None
+    host_type: str = "windows"
+    owner_group_id: int | None = None
+
+class HostUpdate(BaseModel):
+    description: str | None = None
+    host_type: str | None = None
+    owner_group_id: int | None = None
+
+
+@router.get("/owner-groups", response_model=list[OwnerGroupItem])
+def get_owner_groups(db: Session = Depends(get_db)):
+    groups = db.query(OwnerGroup).order_by(OwnerGroup.name).all()
+    return [OwnerGroupItem(id=g.id, name=g.name) for g in groups]
+
+
+def _host_to_item(h: Host) -> HostItem:
+    return HostItem(
+        id=h.id,
+        name=h.name,
+        ip=h.ip,
+        description=h.description,
+        host_type=h.host_type,
+        owner_group_id=h.owner_group_id,
+        owner_group_name=h.owner_group.name if h.owner_group else None,
+        online=h.online,
+    )
+
+
+@router.get("/hosts", response_model=list[HostItem])
+def get_hosts(db: Session = Depends(get_db)):
+    hosts = db.query(Host).order_by(Host.name).all()
+    return [_host_to_item(h) for h in hosts]
+
+
+@router.post("/hosts", response_model=HostItem, status_code=201)
+def create_host(body: HostCreate, db: Session = Depends(get_db)):
+    name = body.ip.upper()
+    if db.query(Host).filter_by(name=name).first():
+        raise HTTPException(status_code=409, detail="主機已存在")
+    host = Host(
+        name=name,
+        ip=body.ip,
+        description=body.description,
+        host_type=body.host_type,
+        owner_group_id=body.owner_group_id,
+    )
+    db.add(host)
+    db.commit()
+    db.refresh(host)
+    return _host_to_item(host)
+
+
+@router.patch("/hosts/{host_id}", response_model=HostItem)
+def update_host(host_id: int, body: HostUpdate, db: Session = Depends(get_db)):
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="主機不存在")
+    if body.description is not None:
+        host.description = body.description
+    if body.host_type is not None:
+        host.host_type = body.host_type
+    if body.owner_group_id is not None:
+        host.owner_group_id = body.owner_group_id
+    db.commit()
+    db.refresh(host)
+    return _host_to_item(host)
+
+
+@router.delete("/hosts/{host_id}", status_code=204)
+def delete_host(host_id: int, db: Session = Depends(get_db)):
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="主機不存在")
+    db.delete(host)
+    db.commit()

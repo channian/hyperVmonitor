@@ -249,3 +249,23 @@ def collect_vm_metrics(
         ))
 
     db.commit()
+
+
+def collect_host_metrics_only(
+    client: WinRMClient,
+    db: Session,
+    host_record: Host,
+):
+    """僅採集主機資源指標（不含 VM），用於一般 Windows Server。"""
+    now = datetime.utcnow()
+    host_raw = json.loads(client.run_ps(_PS_GET_HOST))
+    db.add(HostMetric(
+        host_id=host_record.id,
+        cpu_pct=host_raw["CpuPct"],
+        ram_used_gb=host_raw["RamUsedGB"],
+        ram_total_gb=host_raw["RamTotalGB"],
+        storage_used_tb=round(host_raw["DiskUsedGB"] / 1024, 3),
+        storage_total_tb=round((host_raw["DiskUsedGB"] + host_raw["DiskFreeGB"]) / 1024, 3),
+        collected_at=now,
+    ))
+    db.commit()

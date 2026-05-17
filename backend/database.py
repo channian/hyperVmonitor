@@ -10,10 +10,24 @@ class Settings(BaseSettings):
     winrm_user: str = "administrator"
     winrm_password: str = ""
     hv_hosts: str = ""          # 逗號分隔，如 "10.10.22.187,10.10.22.188"
+    ws_hosts: str = ""   # 逗號分隔的一般 Windows Server IP
 
     # VM 直連帳密（IS 故障時 fallback 用，帳密與宿主機不同時填入）
     vm_winrm_user: str = ""     # 留空則沿用 winrm_user
     vm_winrm_password: str = "" # 留空則沿用 winrm_password
+
+    # LDAP / AD
+    ldap_server: str = ""
+    ldap_domain: str = ""
+    ldap_base_dn: str = ""
+
+    # JWT
+    secret_key: str = "change-me-in-production"
+    access_token_expire_minutes: int = 480
+
+    # 本機管理員（LDAP 故障 fallback）
+    local_admin_username: str = "hvm_admin"
+    local_admin_password_hash: str = ""
 
     # Email
     smtp_host: str = ""

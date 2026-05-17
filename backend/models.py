@@ -4,6 +4,26 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
 
+class OwnerGroup(Base):
+    """主機擁有者群組（如 CIM、IT）"""
+    __tablename__ = "owner_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    hosts: Mapped[list["Host"]] = relationship("Host", back_populates="owner_group")
+
+
+class HvmRole(Base):
+    """HVM 儀表板使用者角色（admin / user）"""
+    __tablename__ = "hvm_roles"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), default="user")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Host(Base):
     """實體 Hyper-V 主機"""
     __tablename__ = "hosts"
@@ -11,11 +31,15 @@ class Host(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     ip: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    host_type: Mapped[str] = mapped_column(String(16), default="hyperv")
+    owner_group_id: Mapped[int | None] = mapped_column(ForeignKey("owner_groups.id"), nullable=True)
     online: Mapped[bool] = mapped_column(Boolean, default=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     vms: Mapped[list["VM"]] = relationship("VM", back_populates="host")
     metrics: Mapped[list["HostMetric"]] = relationship("HostMetric", back_populates="host")
+    owner_group: Mapped["OwnerGroup | None"] = relationship("OwnerGroup", back_populates="hosts")
 
 
 class HostMetric(Base):
